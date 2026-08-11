@@ -21,7 +21,7 @@
 | Groq | Unavailable | Analysis fails with error; no mutation |
 | Shopify Admin API | Unavailable | Loader/action errors; toasts |
 | Image CDN | Unreachable | Analysis fails on download |
-| colorthief/sharp | Missing | Vision-only (logged warning) |
+| Pixel (optional) | Missing ColorThief | Vision-only (logged; never silent “skip forever”) |
 
 ## Operational logs
 

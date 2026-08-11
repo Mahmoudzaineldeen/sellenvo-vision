@@ -20,9 +20,14 @@ const DEMO_BLACK_IMAGE =
   process.env.DEMO_BLACK_WALLET_IMAGE_URL || DEMO_BLACK_WALLET_IMAGE_URL;
 
 const LIST_PRODUCTS_QUERY = `#graphql
-  query GuardianListProducts {
-    products(first: 50, sortKey: UPDATED_AT, reverse: true) {
+  query GuardianListProducts($first: Int!, $after: String) {
+    products(first: $first, after: $after, sortKey: UPDATED_AT, reverse: true) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
       edges {
+        cursor
         node {
           id
           title
@@ -84,6 +89,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const filter = url.searchParams.get("filter") || "attention";
   const page = Math.max(1, Number(url.searchParams.get("page") || "1"));
   const pageSize = 25;
+  const catalogCursor = url.searchParams.get("catalogCursor") || null;
+  const catalogPageSize = 25;
 
   const verdictFilter =
     filter === "attention"
@@ -97,10 +104,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { summarizeCatalogHealth, listCatalogHealth } = await import(
     "../lib/analysis-persist.server"
   );
-  const { listScanJobs } = await import("../lib/jobs.server");
+  const { listScanJobs, isShopPaused } = await import("../lib/jobs.server");
 
   // Persist-first Inbox: never analyze on render. Parallelize independent reads.
   const inboxStarted = Date.now();
+  const dbStarted = Date.now();
   const [health, analyses, jobs, productsResponse] = await Promise.all([
     summarizeCatalogHealth(session.shop),
     listCatalogHealth(session.shop, {
@@ -109,12 +117,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       verdict: verdictFilter,
     }),
     listScanJobs(session.shop, { take: 20 }),
-    admin.graphql(LIST_PRODUCTS_QUERY),
+    admin.graphql(LIST_PRODUCTS_QUERY, {
+      variables: {
+        first: catalogPageSize,
+        after: catalogCursor,
+      },
+    }),
   ]);
+  const parallelMs = Date.now() - dbStarted;
   const inboxLoadMs = Date.now() - inboxStarted;
 
   const json = await productsResponse.json();
   const edges = json.data?.products?.edges ?? [];
+  const pageInfo = json.data?.products?.pageInfo ?? {
+    hasNextPage: false,
+    endCursor: null,
+  };
 
   const products = edges.map(
     (edge: {
@@ -149,6 +167,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   );
 
+  const { logEvent } = await import("../lib/logger.server");
+  logEvent({
+    level: "info",
+    event: "route.catalog.loader",
+    durationMs: inboxLoadMs,
+    details: {
+      parallelMs,
+      productCount: products.length,
+      analysisCount: analyses.length,
+      jobCount: jobs.length,
+      filter,
+      page,
+      healthLoadMs: health.loadMs,
+      catalogCursor: catalogCursor ? "set" : null,
+    },
+  });
+
   return {
     products,
     health,
@@ -159,6 +194,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     page,
     pageSize,
     inboxLoadMs,
+    catalogPageInfo: {
+      hasNextPage: Boolean(pageInfo.hasNextPage),
+      endCursor: pageInfo.endCursor as string | null,
+      cursor: catalogCursor,
+    },
+    jobsPaused: isShopPaused(session.shop),
   };
 };
 
@@ -378,6 +419,117 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   }
 
+  if (intent === "seedDemoCatalog") {
+    // Explicitly labeled demo data — diverse catalog integrity cases
+    const demos = [
+      {
+        key: "match",
+        title: "[Demo] Black Leather Wallet (Correct)",
+        productType: "Wallet",
+        color: "Black",
+        imageUrl: DEMO_BLACK_IMAGE,
+        note: "Correct listing — black image matches Black color",
+      },
+      {
+        key: "color",
+        title: "[Demo] Red Leather Wallet",
+        productType: "Wallet",
+        color: "Red",
+        imageUrl: DEMO_BLACK_IMAGE,
+        note: "Color mismatch — listed Red, image is black",
+      },
+      {
+        key: "material",
+        title: "[Demo] Plastic Wallet",
+        productType: "Wallet",
+        color: "Black",
+        imageUrl: DEMO_BLACK_IMAGE,
+        note: "Material mismatch candidate — listed Plastic, image often looks leather",
+      },
+      {
+        key: "type",
+        title: "[Demo] Travel Bag",
+        productType: "Bag",
+        color: "Black",
+        imageUrl: DEMO_BLACK_IMAGE,
+        note: "Product type mismatch candidate — listed Bag, image is wallet-like",
+      },
+      {
+        key: "missing",
+        title: "[Demo] Leather Wallet (No Image)",
+        productType: "Wallet",
+        color: "Brown",
+        imageUrl: null,
+        note: "Missing image — analysis should fail gracefully",
+      },
+    ];
+
+    const created: Array<{
+      key: string;
+      productId: string;
+      numericId: string;
+      title: string;
+      note: string;
+    }> = [];
+    const errors: string[] = [];
+
+    for (const demo of demos) {
+      try {
+        const result = await createProductWithColorAndMedia(admin, {
+          title: demo.title,
+          descriptionHtml: toDescriptionHtml(
+            `DEMO DATA — ${demo.note}. Not a real merchant product.`,
+          ),
+          productType: demo.productType,
+          color: demo.color,
+          imageUrl: demo.imageUrl,
+          imageAlt: `Demo: ${demo.key}`,
+        });
+        if ("error" in result) {
+          errors.push(`${demo.key}: ${result.error}`);
+          continue;
+        }
+        created.push({
+          key: demo.key,
+          productId: result.created.productId,
+          numericId: result.created.numericId,
+          title: result.created.title,
+          note: demo.note,
+        });
+      } catch (err) {
+        errors.push(
+          `${demo.key}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    return {
+      demoCatalog: {
+        created,
+        errors,
+        label: "DEMO DATA",
+      },
+    };
+  }
+
+  if (intent === "pauseJobs") {
+    const { pauseShopJobs } = await import("../lib/jobs.server");
+    pauseShopJobs(session.shop);
+    return { jobsPaused: true };
+  }
+
+  if (intent === "resumeJobs") {
+    const { resumeShopJobs } = await import("../lib/jobs.server");
+    resumeShopJobs(session.shop);
+    return { jobsPaused: false };
+  }
+
+  if (intent === "cancelAllJobs") {
+    const { cancelAllQueuedJobs } = await import("../lib/jobs.server");
+    const result = await cancelAllQueuedJobs(session.shop);
+    return { cancelledJobs: result.cancelled };
+  }
+
   if (intent === "createTestProduct") {
     const title = String(formData.get("title") || "").trim();
     const description = String(formData.get("description") || "").trim();
@@ -506,6 +658,8 @@ export default function Index() {
     jobs,
     filter,
     page,
+    catalogPageInfo,
+    jobsPaused,
   } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
   const shopify = useAppBridge();
@@ -580,6 +734,23 @@ export default function Index() {
     }
     if ("retried" in fetcher.data && fetcher.data.retried != null) {
       shopify.toast.show(`Retried ${fetcher.data.retried} failed scans`);
+      revalidator.revalidate();
+    }
+    if ("demoCatalog" in fetcher.data && fetcher.data.demoCatalog) {
+      const n = fetcher.data.demoCatalog.created.length;
+      shopify.toast.show(
+        `Demo catalog: ${n} products created (explicitly labeled DEMO DATA)`,
+      );
+      revalidator.revalidate();
+    }
+    if ("cancelledJobs" in fetcher.data && fetcher.data.cancelledJobs != null) {
+      shopify.toast.show(`Cancelled ${fetcher.data.cancelledJobs} queued scans`);
+      revalidator.revalidate();
+    }
+    if ("jobsPaused" in fetcher.data && fetcher.data.jobsPaused != null) {
+      shopify.toast.show(
+        fetcher.data.jobsPaused ? "Scan queue paused" : "Scan queue resumed",
+      );
       revalidator.revalidate();
     }
     if ("error" in fetcher.data && fetcher.data.error) {
@@ -659,15 +830,16 @@ export default function Index() {
               {health.needsAttention > 0
                 ? `${health.needsAttention} listing${health.needsAttention === 1 ? "" : "s"} need attention`
                 : health.totalScanned === 0
-                  ? "No products scanned yet. Open Guardian on a product or queue a catalog scan."
-                  : "All scanned listings look healthy."}
+                  ? "No catalog has been scanned yet. Scan your catalog to find visual listing issues."
+                  : "Your catalog looks healthy. No verified mismatches found."}
             </s-paragraph>
 
             {attrLines.length > 0 ? (
               <s-stack direction="inline" gap="small">
                 {attrLines.map(([attr, count]) => (
                   <s-badge key={attr} tone="critical">
-                    {count} {attr === "productType" ? "Product type" : attr}
+                    {count} {attr === "productType" ? "Product type" : attr}{" "}
+                    mismatch{count === 1 ? "" : "es"}
                   </s-badge>
                 ))}
               </s-stack>
@@ -684,6 +856,16 @@ export default function Index() {
             <s-badge>{health.recentlyFixed} fixed (7d)</s-badge>
           </s-stack>
 
+          {activeJobs > 0 ? (
+            <s-banner tone="info" heading="Scanning in progress">
+              <s-paragraph>
+                Scanning {doneJobs} / {doneJobs + activeJobs + failedJobs}{" "}
+                products ({activeJobs} in queue). You can keep working — results
+                appear here when each scan finishes.
+              </s-paragraph>
+            </s-banner>
+          ) : null}
+
           <s-stack direction="inline" gap="base" alignItems="center">
             <s-button
               variant="primary"
@@ -697,6 +879,7 @@ export default function Index() {
               onClick={() =>
                 fetcher.submit({ intent: "retryFailedJobs" }, { method: "POST" })
               }
+              disabled={failedJobs === 0 || isBulkScanning}
             >
               Retry failed scans
             </s-button>
@@ -735,10 +918,27 @@ export default function Index() {
           </s-stack>
 
           {analyses.length === 0 ? (
-            <s-paragraph>
-              Nothing in this view yet. Scan the catalog or open Guardian on a
-              product — results persist here without re-analyzing on page load.
-            </s-paragraph>
+            health.totalScanned === 0 ? (
+              <s-banner tone="info" heading="No analyses yet">
+                <s-paragraph>
+                  Scan your catalog to find listing issues, or open Guardian on
+                  a single product. Results stay here — we never re-analyze just
+                  to paint this page.
+                </s-paragraph>
+              </s-banner>
+            ) : filter === "attention" && health.needsAttention === 0 ? (
+              <s-banner tone="success" heading="Your catalog looks healthy">
+                <s-paragraph>
+                  No verified mismatches found. Check Uncertain if you want to
+                  review inconclusive listings.
+                </s-paragraph>
+              </s-banner>
+            ) : (
+              <s-paragraph>
+                Nothing in this view yet. Try another filter or scan more
+                products.
+              </s-paragraph>
+            )
           ) : (
             <s-stack direction="block" gap="base">
               {analyses.map((row) => {
@@ -838,32 +1038,196 @@ export default function Index() {
         </s-stack>
       </s-section>
 
-      {jobs.length > 0 ? (
+      {jobs.length > 0 || jobsPaused ? (
         <s-section heading="Scan jobs">
-          <s-stack direction="inline" gap="small" alignItems="center">
-            <s-badge>{activeJobs} active</s-badge>
-            <s-badge {...(failedJobs > 0 ? { tone: "critical" as const } : {})}>
-              {failedJobs} failed
-            </s-badge>
-            <s-badge tone="success">{doneJobs} done</s-badge>
+          <s-stack direction="block" gap="base">
+            <s-stack direction="inline" gap="small" alignItems="center">
+              <s-badge>{activeJobs} active</s-badge>
+              <s-badge {...(failedJobs > 0 ? { tone: "critical" as const } : {})}>
+                {failedJobs} failed
+              </s-badge>
+              <s-badge tone="success">{doneJobs} done</s-badge>
+              {jobsPaused ? (
+                <s-badge tone="caution">Paused</s-badge>
+              ) : null}
+            </s-stack>
+            <s-stack direction="inline" gap="base">
+              {jobsPaused ? (
+                <s-button
+                  onClick={() =>
+                    fetcher.submit({ intent: "resumeJobs" }, { method: "POST" })
+                  }
+                >
+                  Resume scans
+                </s-button>
+              ) : (
+                <s-button
+                  onClick={() =>
+                    fetcher.submit({ intent: "pauseJobs" }, { method: "POST" })
+                  }
+                  disabled={activeJobs === 0}
+                >
+                  Pause queue
+                </s-button>
+              )}
+              <s-button
+                tone="critical"
+                onClick={() =>
+                  fetcher.submit({ intent: "cancelAllJobs" }, { method: "POST" })
+                }
+                disabled={activeJobs === 0}
+              >
+                Cancel queued
+              </s-button>
+            </s-stack>
           </s-stack>
         </s-section>
       ) : null}
 
-      <s-section heading="Sellenvo Vision">
+      <s-section heading="Products">
         <s-paragraph>
-          Create any test product below, or use Demo Product B for the classic
-          Red listing + black wallet mismatch. Guardian opens automatically and
-          starts analysis.
+          Newest Shopify products (paginated). Open Guardian to review a single
+          listing — Catalog Health above is the primary inbox.
         </s-paragraph>
+        {products.length === 0 ? (
+          <s-banner tone="info" heading="No products found">
+            Use Demo tools below to seed example products, or create a product
+            in Shopify Admin.
+          </s-banner>
+        ) : (
+          <s-stack direction="block" gap="base">
+            {products.map(
+              (product: {
+                id: string;
+                numericId: string;
+                title: string;
+                description: string;
+                productType: string | null;
+                color: string | null;
+                imageUrl: string | null;
+              }) => (
+                <s-box
+                  key={product.id}
+                  padding="large"
+                  borderWidth="base"
+                  borderRadius="large"
+                  background="base"
+                  inlineSize="100%"
+                >
+                  <s-stack
+                    direction="inline"
+                    gap="large"
+                    alignItems="start"
+                    justifyContent="space-between"
+                    inlineSize="100%"
+                  >
+                    <s-stack direction="inline" gap="base" alignItems="start">
+                      {product.imageUrl ? (
+                        <s-thumbnail
+                          src={product.imageUrl}
+                          alt={product.title}
+                          size="small"
+                        />
+                      ) : null}
+                      <s-stack direction="block" gap="small">
+                        <s-heading>{product.title}</s-heading>
+                        <s-stack direction="inline" gap="small">
+                          <s-badge>
+                            Color: {product.color ?? "—"}
+                          </s-badge>
+                          <s-badge>
+                            Type: {product.productType || "—"}
+                          </s-badge>
+                        </s-stack>
+                        {product.description ? (
+                          <s-paragraph>
+                            {product.description.length > 140
+                              ? `${product.description.slice(0, 140)}…`
+                              : product.description}
+                          </s-paragraph>
+                        ) : null}
+                      </s-stack>
+                    </s-stack>
+                    <s-stack direction="inline" gap="base">
+                      <s-button
+                        variant="primary"
+                        href={`/app/guardian/${product.numericId}`}
+                      >
+                        Open Guardian
+                      </s-button>
+                      <s-button
+                        tone="critical"
+                        onClick={() =>
+                          deleteProduct(product.id, product.title)
+                        }
+                        disabled={isDeleting}
+                        {...(deletingProductId === product.id
+                          ? { loading: true }
+                          : {})}
+                      >
+                        Delete
+                      </s-button>
+                    </s-stack>
+                  </s-stack>
+                </s-box>
+              ),
+            )}
+            <s-stack
+              direction="inline"
+              gap="base"
+              alignItems="center"
+              justifyContent="center"
+            >
+              {catalogPageInfo.cursor ? (
+                <s-button
+                  onClick={() =>
+                    navigate(
+                      `/app?filter=${encodeURIComponent(filter)}&page=${page}`,
+                    )
+                  }
+                >
+                  Newest
+                </s-button>
+              ) : null}
+              {catalogPageInfo.hasNextPage && catalogPageInfo.endCursor ? (
+                <s-button
+                  onClick={() =>
+                    navigate(
+                      `/app?filter=${encodeURIComponent(filter)}&page=${page}&catalogCursor=${encodeURIComponent(catalogPageInfo.endCursor!)}`,
+                    )
+                  }
+                >
+                  Next products
+                </s-button>
+              ) : null}
+            </s-stack>
+          </s-stack>
+        )}
+      </s-section>
+
+      <s-section heading="Demo tools">
+        <s-banner tone="info" heading="Demo data">
+          <s-paragraph>
+            These actions create explicitly labeled demo products for testing.
+            They are not merchant catalog data and titles are prefixed with
+            [Demo].
+          </s-paragraph>
+        </s-banner>
         <s-stack direction="inline" gap="base">
+          <s-button
+            onClick={() =>
+              fetcher.submit({ intent: "seedDemoCatalog" }, { method: "POST" })
+            }
+          >
+            Seed demo catalog
+          </s-button>
           <s-button
             onClick={() =>
               fetcher.submit({ intent: "seedDemoB" }, { method: "POST" })
             }
             {...(isSeeding ? { loading: true } : {})}
           >
-            Create Demo Product B
+            Create Demo Product B (golden path)
           </s-button>
         </s-stack>
         {seeded && (
@@ -1018,94 +1382,6 @@ export default function Index() {
               Open Guardian
             </s-button>
           </s-banner>
-        )}
-      </s-section>
-
-      <s-section heading="Products">
-        {products.length === 0 ? (
-          <s-banner tone="info" heading="No products found">
-            Create a custom test product above, or click &quot;Create Demo
-            Product B&quot;.
-          </s-banner>
-        ) : (
-          <s-stack direction="block" gap="base">
-            {products.map(
-              (product: {
-                id: string;
-                numericId: string;
-                title: string;
-                description: string;
-                productType: string | null;
-                color: string | null;
-                imageUrl: string | null;
-              }) => (
-                <s-box
-                  key={product.id}
-                  padding="large"
-                  borderWidth="base"
-                  borderRadius="large"
-                  background="base"
-                  inlineSize="100%"
-                >
-                  <s-stack
-                    direction="inline"
-                    gap="large"
-                    alignItems="start"
-                    justifyContent="space-between"
-                    inlineSize="100%"
-                  >
-                    <s-stack direction="inline" gap="base" alignItems="start">
-                      {product.imageUrl ? (
-                        <s-thumbnail
-                          src={product.imageUrl}
-                          alt={product.title}
-                          size="small"
-                        />
-                      ) : null}
-                      <s-stack direction="block" gap="small">
-                        <s-heading>{product.title}</s-heading>
-                        <s-stack direction="inline" gap="small">
-                          <s-badge>
-                            Color: {product.color ?? "—"}
-                          </s-badge>
-                          <s-badge>
-                            Type: {product.productType || "—"}
-                          </s-badge>
-                        </s-stack>
-                        {product.description ? (
-                          <s-paragraph>
-                            {product.description.length > 140
-                              ? `${product.description.slice(0, 140)}…`
-                              : product.description}
-                          </s-paragraph>
-                        ) : null}
-                      </s-stack>
-                    </s-stack>
-                    <s-stack direction="inline" gap="base">
-                      <s-button
-                        variant="primary"
-                        href={`/app/guardian/${product.numericId}`}
-                      >
-                        Open Guardian
-                      </s-button>
-                      <s-button
-                        tone="critical"
-                        onClick={() =>
-                          deleteProduct(product.id, product.title)
-                        }
-                        disabled={isDeleting}
-                        {...(deletingProductId === product.id
-                          ? { loading: true }
-                          : {})}
-                      >
-                        Delete
-                      </s-button>
-                    </s-stack>
-                  </s-stack>
-                </s-box>
-              ),
-            )}
-          </s-stack>
         )}
       </s-section>
 

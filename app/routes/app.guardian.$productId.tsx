@@ -87,6 +87,11 @@ function verdictTone(
 
 function normalizeProduct(product: ProductNode) {
   const imageUrl = getImageUrl(product);
+  const colorOption = product.options.find(
+    (o) =>
+      o.name.toLowerCase() === "color" || o.name.toLowerCase() === "colour",
+  );
+  const colorValues = colorOption?.optionValues ?? [];
   return {
     id: product.id,
     title: product.title,
@@ -94,11 +99,10 @@ function normalizeProduct(product: ProductNode) {
     options: product.options,
     imageUrl,
     hasUsableImage: Boolean(imageUrl) && !isPlaceholderImage(imageUrl),
-    claimedColor:
-      product.options.find(
-        (o) =>
-          o.name.toLowerCase() === "color" || o.name.toLowerCase() === "colour",
-      )?.optionValues[0]?.name ?? null,
+    claimedColor: colorValues[0]?.name ?? null,
+    /** Honest limitation: only the first Color option value is compared today. */
+    colorVariantCount: colorValues.length,
+    colorOptionName: colorOption?.name ?? null,
     claimedMaterial: extractMaterialFromTitle(product.title),
   };
 }
@@ -113,6 +117,7 @@ type FixPhase =
 type ModalKind = "confirm" | "edit" | "applyAll" | null;
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
+  const loaderStarted = Date.now();
   const { admin, session } = await authenticate.admin(request);
   const productId = params.productId;
   if (!productId) {
@@ -124,28 +129,39 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     : `gid://shopify/Product/${productId}`;
 
   try {
+    const shopifyStarted = Date.now();
     const product = await fetchProductNode(admin, gid);
+    const shopifyMs = Date.now() - shopifyStarted;
     if (!product) {
       return {
         product: null,
         analysis: null as null,
         autoAnalyze: false,
+        materialWriteMode: "metafield" as const,
         loadError:
           "Product not found in Shopify. It may have been deleted — return to Catalog Health.",
+        timings: {
+          shopifyMs,
+          dbMs: 0,
+          totalMs: Date.now() - loaderStarted,
+        },
       };
     }
 
     const normalized = normalizeProduct(product);
     let analysis = null as ReturnType<typeof analysisFromPersistedRow>;
     let autoAnalyze = Boolean(normalized.hasUsableImage);
+    let dbMs = 0;
 
     // Instant paint: reuse last analysis for this image (no Groq on open)
     if (normalized.imageUrl && session.shop) {
       try {
+        const dbStarted = Date.now();
         const latest = await getLatestAnalysisForProduct(
           session.shop,
           product.id,
         );
+        dbMs = Date.now() - dbStarted;
         if (latest?.imageUrl === normalized.imageUrl) {
           const restored = analysisFromPersistedRow(latest);
           if (restored) {
@@ -170,11 +186,40 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       }
     }
 
+    let materialWriteMode: "metafield" | "title" | "both" = "metafield";
+    try {
+      const { getShopSettings } = await import("../lib/shop-settings.server");
+      const settings = await getShopSettings(session.shop);
+      materialWriteMode = settings.materialWriteMode;
+    } catch {
+      /* defaults */
+    }
+
+    const timings = {
+      shopifyMs,
+      dbMs,
+      totalMs: Date.now() - loaderStarted,
+    };
+    const { logEvent } = await import("../lib/logger.server");
+    logEvent({
+      level: "info",
+      event: "route.guardian.loader",
+      productId: gid,
+      durationMs: timings.totalMs,
+      details: {
+        shopifyMs: timings.shopifyMs,
+        dbMs: timings.dbMs,
+        cacheHit: Boolean(analysis),
+      },
+    });
+
     return {
       product: normalized,
       analysis,
       autoAnalyze,
+      materialWriteMode,
       loadError: null,
+      timings,
     };
   } catch (err) {
     const message =
@@ -186,7 +231,13 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       product: null,
       analysis: null,
       autoAnalyze: false,
+      materialWriteMode: "metafield" as const,
       loadError: message,
+      timings: {
+        shopifyMs: 0,
+        dbMs: 0,
+        totalMs: Date.now() - loaderStarted,
+      },
     };
   }
 };
@@ -389,6 +440,22 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         });
       const mutateMs = Date.now() - mutateStarted;
 
+      // Approver identity: prefer online user id, then session id
+      const auditUserId = (() => {
+        const onlineUser =
+          session.onlineAccessInfo &&
+          "associated_user" in session.onlineAccessInfo
+            ? session.onlineAccessInfo.associated_user
+            : null;
+        if (onlineUser && typeof onlineUser === "object" && "id" in onlineUser) {
+          return String(onlineUser.id);
+        }
+        // Prisma-backed offline sessions may carry userId via index signature
+        const maybeUserId = (session as { userId?: unknown }).userId;
+        if (maybeUserId != null) return String(maybeUserId);
+        return session.id ?? null;
+      })();
+
       // Parallel audit writes — independent rows
       await Promise.all(
         outcomes.map((outcome) => {
@@ -396,7 +463,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           return recordAuditEvent({
             shop,
             productId: gid,
-            userId: null,
+            userId: auditUserId,
             attribute: outcome.field,
             oldValue: requested?.currentValue ?? null,
             newValue: requested?.newValue ?? null,
@@ -569,6 +636,152 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     }
   }
 
+  if (intent === "revert") {
+    const field = String(formData.get("field") || "") as FixableSignal;
+    const force = String(formData.get("force") || "") === "1";
+    const allowedFields: FixableSignal[] = [
+      "color",
+      "productType",
+      "material",
+      "pattern",
+      "finish",
+    ];
+    if (!allowedFields.includes(field)) {
+      return { error: `Unsupported revert field: ${field}`, requestId };
+    }
+
+    const { getLatestSuccessfulAudit, recordAuditEvent } = await import(
+      "../lib/analysis-persist.server"
+    );
+    const { getShopSettings, toFixSettings } = await import(
+      "../lib/shop-settings.server"
+    );
+    const audit = await getLatestSuccessfulAudit({
+      shop,
+      productId: gid,
+      attribute: field,
+    });
+    if (!audit?.oldValue || !audit.newValue) {
+      return {
+        error: "No reversible mutation found for this attribute.",
+        requestId,
+      };
+    }
+
+    // Validate current Shopify state still matches the audited newValue
+    const product = await fetchProductNode(admin, gid);
+    if (!product) {
+      return { error: "Product not found in Shopify.", requestId };
+    }
+    const { fetchProductSellenvoMetafields } = await import(
+      "../lib/metafields.server"
+    );
+    const meta = await fetchProductSellenvoMetafields(admin, gid);
+    const { extractListingFacts } = await import("../lib/consistency.server");
+    const listing = extractListingFacts(product, meta);
+
+    const currentValue =
+      field === "color"
+        ? listing.claimedColor
+        : field === "productType"
+          ? listing.productType
+          : field === "material"
+            ? listing.claimedMaterial
+            : field === "pattern"
+              ? listing.claimedPattern
+              : listing.claimedFinish;
+
+    const matchesAudited =
+      (currentValue || "").toLowerCase().trim() ===
+      audit.newValue.toLowerCase().trim();
+
+    if (!matchesAudited && !force) {
+      return {
+        error: `Shopify value changed since the fix. Expected "${audit.newValue}" but found "${currentValue ?? "—"}". Revert would overwrite a newer merchant change.`,
+        staleRevert: true,
+        expectedValue: audit.newValue,
+        currentValue: currentValue ?? null,
+        oldValue: audit.oldValue,
+        requestId,
+      };
+    }
+
+    const shopSettings = await getShopSettings(shop);
+    const fixSettings = toFixSettings(shopSettings);
+    let optionId: string | undefined;
+    let optionValueId: string | undefined;
+    if (field === "color") {
+      const opt = product.options.find(
+        (o) =>
+          o.name.toLowerCase() === "color" ||
+          o.name.toLowerCase() === "colour",
+      );
+      optionId = opt?.id;
+      optionValueId = opt?.optionValues[0]?.id;
+    }
+
+    const { outcomes, product: updated } = await applyShopifyFixes(
+      admin,
+      gid,
+      [
+        {
+          field,
+          newValue: audit.oldValue,
+          currentValue: currentValue ?? undefined,
+          optionId,
+          optionValueId,
+        },
+      ],
+      { settings: fixSettings, merchantConfirmed: true },
+    );
+
+    const outcome = outcomes[0];
+    const onlineUser =
+      session.onlineAccessInfo &&
+      "associated_user" in session.onlineAccessInfo
+        ? session.onlineAccessInfo.associated_user
+        : null;
+    const auditUserId =
+      onlineUser && typeof onlineUser === "object" && "id" in onlineUser
+        ? String(onlineUser.id)
+        : session.id ?? null;
+
+    await recordAuditEvent({
+      shop,
+      productId: gid,
+      userId: auditUserId,
+      attribute: field,
+      oldValue: audit.newValue,
+      newValue: audit.oldValue,
+      reason: "revert",
+      success: outcome?.success ?? false,
+      error: outcome?.error ?? null,
+      meta: {
+        verifiedValue: outcome?.verifiedValue,
+        priorAuditId: audit.id,
+        forced: force,
+      },
+    });
+
+    if (!outcome?.success) {
+      return {
+        error: outcome?.error || "Revert failed verification",
+        requestId,
+      };
+    }
+
+    return {
+      revertResult: {
+        success: true,
+        field,
+        restoredValue: audit.oldValue,
+        verifiedValue: outcome.verifiedValue,
+        product: updated ? normalizeProduct(updated) : normalizeProduct(product),
+      },
+      requestId,
+    };
+  }
+
   return { error: `Unknown intent: ${intent}`, requestId };
 };
 
@@ -578,6 +791,7 @@ export default function GuardianPage() {
     loadError,
     analysis: loaderAnalysis,
     autoAnalyze: shouldAutoAnalyze,
+    materialWriteMode,
   } =
     useLoaderData<typeof loader>();
 
@@ -609,17 +823,26 @@ export default function GuardianPage() {
     );
   }
 
-  return <GuardianContent initialProduct={initialProduct} initialAnalysis={loaderAnalysis} autoAnalyze={shouldAutoAnalyze} />;
+  return (
+    <GuardianContent
+      initialProduct={initialProduct}
+      initialAnalysis={loaderAnalysis}
+      autoAnalyze={shouldAutoAnalyze}
+      materialWriteMode={materialWriteMode}
+    />
+  );
 }
 
 function GuardianContent({
   initialProduct,
   initialAnalysis,
   autoAnalyze: shouldAutoAnalyze,
+  materialWriteMode,
 }: {
   initialProduct: ReturnType<typeof normalizeProduct>;
   initialAnalysis: import("../lib/types").AnalysisResult | null;
   autoAnalyze: boolean;
+  materialWriteMode: "metafield" | "title" | "both";
 }) {
   const fetcher = useFetcher<typeof action>();
   const shopify = useAppBridge();
@@ -873,6 +1096,30 @@ function GuardianContent({
     fixModal.show();
   }, [busy, analysis, fixModal]);
 
+  const applySafeFixes = useCallback(() => {
+    if (busy || !analysis?.suggestedFixes.length) return;
+    // Safe mode: server filters to fixPolicy===safe && safeAutoFixEnabled
+    setFixPhase("updating");
+    setActiveFixField(null);
+    setBulkProgress(
+      analysis.suggestedFixes.map((f) => ({
+        field: f.field,
+        success: false,
+        verifiedValue: null,
+      })),
+    );
+    setBulkSummary("Applying safe fixes…");
+    fetcher.submit(
+      {
+        intent: "applyAllFixes",
+        applyMode: "safe",
+        fixesJson: JSON.stringify(analysis.suggestedFixes),
+        requestId: nextRequestId(),
+      },
+      { method: "POST" },
+    );
+  }, [busy, analysis, fetcher, nextRequestId]);
+
   const submitFix = useCallback(
     (fix: SuggestedFix, newValue: string) => {
       if (busy) return;
@@ -898,23 +1145,29 @@ function GuardianContent({
   );
 
   const confirmModal = useCallback(
-    (editValue?: string) => {
+    (editValue?: string, selectedFixes?: SuggestedFix[]) => {
       if (busy) return;
       if (modalKind === "applyAll" && analysis) {
+        const toApply =
+          selectedFixes && selectedFixes.length > 0
+            ? selectedFixes
+            : analysis.suggestedFixes;
+        if (toApply.length === 0) return;
         setFixPhase("updating");
         setActiveFixField(null);
         setBulkProgress(
-          analysis.suggestedFixes.map((f) => ({
+          toApply.map((f) => ({
             field: f.field,
             success: false,
             verifiedValue: null,
           })),
         );
-        setBulkSummary(`Applying ${analysis.suggestedFixes.length} fixes…`);
+        setBulkSummary(`Applying ${toApply.length} selected fix${toApply.length === 1 ? "" : "es"}…`);
         fetcher.submit(
           {
             intent: "applyAllFixes",
-            fixesJson: JSON.stringify(analysis.suggestedFixes),
+            applyMode: "confirm",
+            fixesJson: JSON.stringify(toApply),
             requestId: nextRequestId(),
           },
           { method: "POST" },
@@ -1025,6 +1278,16 @@ function GuardianContent({
                 <s-text type="strong">Color: </s-text>
                 <s-text>{product.claimedColor ?? "Not set"}</s-text>
               </s-paragraph>
+              {product.colorVariantCount > 1 ? (
+                <s-banner tone="warning" heading="Checking first color only">
+                  <s-paragraph>
+                    This product has {product.colorVariantCount}{" "}
+                    {product.colorOptionName || "Color"} values. Sellenvo
+                    currently compares and can fix the first value (
+                    {product.claimedColor}) only — not every variant.
+                  </s-paragraph>
+                </s-banner>
+              ) : null}
               <s-paragraph>
                 <s-text type="strong">Type: </s-text>
                 <s-text>{product.productType || "—"}</s-text>
@@ -1464,16 +1727,22 @@ function GuardianContent({
                     );
                   })}
                   {analysis.suggestedFixes.length > 1 && (
-                    <s-button
-                      variant="primary"
-                      onClick={openApplyAll}
-                      disabled={busy}
-                      {...(intent === "applyAllFixes" ? { loading: true } : {})}
-                    >
-                      {intent === "applyAllFixes"
-                        ? `Applying ${analysis.suggestedFixes.length} fixes…`
-                        : `Apply All Safe Fixes (${analysis.suggestedFixes.length})`}
-                    </s-button>
+                    <s-stack direction="inline" gap="base">
+                      <s-button
+                        onClick={applySafeFixes}
+                        disabled={busy}
+                        {...(intent === "applyAllFixes" ? { loading: true } : {})}
+                      >
+                        Apply all safe fixes
+                      </s-button>
+                      <s-button
+                        variant="primary"
+                        onClick={openApplyAll}
+                        disabled={busy}
+                      >
+                        Review & apply selected ({analysis.suggestedFixes.length})
+                      </s-button>
+                    </s-stack>
                   )}
                 </s-stack>
               </s-box>
@@ -1491,6 +1760,7 @@ function GuardianContent({
           suggestedValue={pendingFix?.suggestedValue}
           fixes={analysis?.suggestedFixes}
           loading={isFixing}
+          materialWriteMode={materialWriteMode}
           onCancel={() => {
             if (isFixing) return;
             fixModal.hide();

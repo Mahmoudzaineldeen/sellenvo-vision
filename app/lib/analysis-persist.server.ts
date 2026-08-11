@@ -208,6 +208,24 @@ export async function recordAuditEvent(args: {
   });
 }
 
+/** Latest successful mutation for an attribute — used by revert. */
+export async function getLatestSuccessfulAudit(args: {
+  shop: string;
+  productId: string;
+  attribute: string;
+}) {
+  return db.auditEvent.findFirst({
+    where: {
+      shop: args.shop,
+      productId: args.productId,
+      attribute: args.attribute,
+      success: true,
+      reason: { not: "revert" },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
 export async function recordVisionFeedback(args: {
   shop: string;
   productId: string;

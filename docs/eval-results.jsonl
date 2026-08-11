@@ -1,0 +1,5 @@
+{"id":"E01","attribute":"color","claimed":"Red","detected":"Black","labelCorrect":true,"suggestedFix":"Black","fixCorrect":true,"verdict":"MISMATCH","note":"Internal evaluation — demo golden path shape"}
+{"id":"E02","attribute":"color","claimed":"Black","detected":"Black","labelCorrect":true,"suggestedFix":null,"fixCorrect":null,"verdict":"MATCH","note":"Internal evaluation — correct listing"}
+{"id":"E03","attribute":"material","claimed":"Plastic","detected":"leather","labelCorrect":true,"suggestedFix":"Leather","fixCorrect":true,"verdict":"MISMATCH","note":"Internal evaluation — synthetic demo case"}
+{"id":"E04","attribute":"productType","claimed":"Bag","detected":"wallet","labelCorrect":true,"suggestedFix":"Wallet","fixCorrect":true,"verdict":"MISMATCH","note":"Internal evaluation — synthetic demo case"}
+{"id":"E05","attribute":"color","claimed":"Navy","detected":"Blue","labelCorrect":false,"suggestedFix":"Blue","fixCorrect":false,"verdict":"MISMATCH","note":"Internal evaluation — example false mismatch / false fix"}

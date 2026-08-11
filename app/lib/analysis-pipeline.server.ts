@@ -1,11 +1,10 @@
 import {
-  analyzeProductImageDataUri,
-  analyzeProductImageUrl,
   downloadProductImage,
   formatVisionUserError,
   isVisionRateLimitError,
   toVisionOptimizedImageUrl,
 } from "./vision.server";
+import { analyzeWithProviders } from "./vision";
 import { extractDominantColor } from "./color-analysis.server";
 import {
   buildAnalysisResultV2,
@@ -161,27 +160,48 @@ async function buildVisualFacts(
   });
 
   let vision;
+  let visionProviderId = "groq";
   if (canUseRemoteUrl) {
     try {
-      vision = await analyzeProductImageUrl(visionImageUrl, visionOpts);
+      const result = await analyzeWithProviders({
+        imageUrl: visionImageUrl,
+        ...visionOpts,
+      });
+      vision = result.response;
+      visionProviderId = result.providerId;
     } catch (urlErr) {
       // Rate limit: never fall back to base64 — that burns far more TPD.
       if (isVisionRateLimitError(urlErr)) throw urlErr;
       const downloaded = await downloadPromise;
       if (!downloaded) throw urlErr;
-      vision = await analyzeProductImageDataUri(downloaded.dataUri, visionOpts);
+      const result = await analyzeWithProviders({
+        dataUri: downloaded.dataUri,
+        imageUrl: visionImageUrl,
+        ...visionOpts,
+      });
+      vision = result.response;
+      visionProviderId = result.providerId;
     }
   } else {
     const downloaded = await downloadPromise;
     if (!downloaded) {
       throw new Error("Could not download product image for vision analysis");
     }
-    vision = await analyzeProductImageDataUri(downloaded.dataUri, {
-      ...visionOpts,
+    const result = await analyzeWithProviders({
+      dataUri: downloaded.dataUri,
       imageUrl,
+      ...visionOpts,
     });
+    vision = result.response;
+    visionProviderId = result.providerId;
   }
   const visionMs = Date.now() - visionStarted;
+  logEvent({
+    level: "info",
+    event: "analysis.vision.completed",
+    durationMs: visionMs,
+    details: { providerId: visionProviderId },
+  });
 
   const pixelStarted = Date.now();
   let pixelColor: string | undefined;

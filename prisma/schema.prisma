@@ -35,6 +35,8 @@ model Analysis {
   id                 String   @id @default(cuid())
   shop               String
   productId          String
+  /// Future multi-variant support — currently null (first Color option only)
+  variantId          String?
   productTitle       String?
   imageUrl           String?
   imageHash          String?
@@ -53,6 +55,7 @@ model Analysis {
 
   @@index([shop, createdAt])
   @@index([shop, productId])
+  @@index([shop, productId, variantId])
   @@index([shop, verdict])
   @@index([shop, healthScore])
 }

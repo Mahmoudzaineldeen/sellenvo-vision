@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { FixableSignal, SuggestedFix } from "../lib/types";
 import { MATERIAL_KEYWORDS } from "../lib/materials";
+import { PATTERN_KEYWORDS } from "../lib/attributes/normalize/pattern";
+import { FINISH_KEYWORDS } from "../lib/attributes/normalize/finish";
 
 const MODAL_ID = "fix-confirmation-modal";
 
@@ -9,10 +11,56 @@ type ModalElement = HTMLElement & {
   hideOverlay?: () => void;
 };
 
-function fieldLabel(field: FixableSignal): string {
+export type MaterialWriteMode = "metafield" | "title" | "both";
+
+function fieldLabel(
+  field: FixableSignal,
+  materialWriteMode: MaterialWriteMode = "metafield",
+): string {
   if (field === "productType") return "Product type";
-  if (field === "material") return "Material (in product title)";
-  return "Color option";
+  if (field === "material") {
+    if (materialWriteMode === "title") return "Material (product title)";
+    if (materialWriteMode === "both") return "Material (metafield + title)";
+    return "Material (metafield)";
+  }
+  if (field === "pattern") return "Pattern";
+  if (field === "finish") return "Finish";
+  return "Color";
+}
+
+function materialStorageExplanation(mode: MaterialWriteMode): string {
+  if (mode === "title") {
+    return "This will rewrite the material word in your product title.";
+  }
+  if (mode === "both") {
+    return "This will update the sellenvo.material metafield and rewrite the material word in your product title.";
+  }
+  return "This will update the sellenvo.material metafield only. Your product title will not change.";
+}
+
+const COLOR_SWATCHES: Record<string, string> = {
+  black: "#1a1a1a",
+  white: "#f5f5f5",
+  red: "#c82828",
+  blue: "#2850c8",
+  green: "#28a03c",
+  yellow: "#e6d228",
+  orange: "#e6821e",
+  purple: "#7832b4",
+  pink: "#e678a0",
+  brown: "#784628",
+  grey: "#8c8c8c",
+  gray: "#8c8c8c",
+  navy: "#142864",
+  beige: "#d2beb0",
+  gold: "#c8aa32",
+  silver: "#b4b4be",
+  maroon: "#6e1428",
+  teal: "#1e8c8c",
+};
+
+function swatchFor(name: string): string | null {
+  return COLOR_SWATCHES[name.toLowerCase().trim()] ?? null;
 }
 
 const COMMON_COLORS = [
@@ -58,8 +106,93 @@ interface FixModalProps {
   suggestedValue?: string;
   fixes?: SuggestedFix[];
   loading?: boolean;
+  materialWriteMode?: MaterialWriteMode;
   onCancel: () => void;
-  onConfirm: (value?: string) => void;
+  /** For applyAll, receives selected fixes. For edit, receives the edited value. */
+  onConfirm: (value?: string, selectedFixes?: SuggestedFix[]) => void;
+}
+
+function BeforeAfterRow({
+  field,
+  currentValue,
+  proposedValue,
+  materialWriteMode,
+}: {
+  field: FixableSignal;
+  currentValue: string;
+  proposedValue: string;
+  materialWriteMode: MaterialWriteMode;
+}) {
+  const currentSwatch = field === "color" ? swatchFor(currentValue) : null;
+  const proposedSwatch = field === "color" ? swatchFor(proposedValue) : null;
+
+  return (
+    <s-box
+      padding="base"
+      borderWidth="base"
+      borderRadius="base"
+      background="subdued"
+    >
+      <s-stack direction="block" gap="base">
+        <s-text type="strong">{fieldLabel(field, materialWriteMode)}</s-text>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr auto 1fr",
+            gap: 12,
+            alignItems: "center",
+          }}
+        >
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>
+              Current
+            </div>
+            <s-stack direction="inline" gap="small">
+              {currentSwatch && (
+                <span
+                  aria-hidden
+                  style={{
+                    width: 16,
+                    height: 16,
+                    borderRadius: 4,
+                    background: currentSwatch,
+                    border: "1px solid #ccc",
+                    display: "inline-block",
+                  }}
+                />
+              )}
+              <s-text type="strong">{currentValue || "—"}</s-text>
+            </s-stack>
+          </div>
+          <s-text>→</s-text>
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>
+              Proposed
+            </div>
+            <s-stack direction="inline" gap="small">
+              {proposedSwatch && (
+                <span
+                  aria-hidden
+                  style={{
+                    width: 16,
+                    height: 16,
+                    borderRadius: 4,
+                    background: proposedSwatch,
+                    border: "1px solid #ccc",
+                    display: "inline-block",
+                  }}
+                />
+              )}
+              <s-text type="strong">{proposedValue || "—"}</s-text>
+            </s-stack>
+          </div>
+        </div>
+        {field === "material" && (
+          <s-text>{materialStorageExplanation(materialWriteMode)}</s-text>
+        )}
+      </s-stack>
+    </s-box>
+  );
 }
 
 /**
@@ -74,17 +207,24 @@ export function FixModal({
   suggestedValue = "",
   fixes = [],
   loading,
+  materialWriteMode = "metafield",
   onCancel,
   onConfirm,
 }: FixModalProps) {
   const [editValue, setEditValue] = useState(suggestedValue);
   const [seedOpen, setSeedOpen] = useState(open);
   const [seedSuggested, setSeedSuggested] = useState(suggestedValue);
+  const [selectedFields, setSelectedFields] = useState<Set<FixableSignal>>(
+    () => new Set(fixes.map((f) => f.field)),
+  );
 
   if (open !== seedOpen || suggestedValue !== seedSuggested) {
     setSeedOpen(open);
     setSeedSuggested(suggestedValue);
-    if (open) setEditValue(suggestedValue);
+    if (open) {
+      setEditValue(suggestedValue);
+      setSelectedFields(new Set(fixes.map((f) => f.field)));
+    }
   }
 
   useEffect(() => {
@@ -97,12 +237,17 @@ export function FixModal({
     }
   }, [open]);
 
+  const selectedFixes = useMemo(
+    () => fixes.filter((f) => selectedFields.has(f.field)),
+    [fixes, selectedFields],
+  );
+
   const heading =
     mode === "applyAll"
-      ? `Apply ${fixes.length} fixes?`
+      ? `Review ${fixes.length} change${fixes.length === 1 ? "" : "s"}`
       : mode === "edit"
-        ? `Edit ${field ? fieldLabel(field) : "value"}`
-        : "Confirm Correction";
+        ? `Edit ${field ? fieldLabel(field, materialWriteMode) : "value"}`
+        : "Confirm correction";
 
   const options =
     field === "color"
@@ -123,11 +268,51 @@ export function FixModal({
               ].filter(Boolean),
             ),
           )
-        : Array.from(
-            new Set(
-              [suggestedValue, currentValue, ...COMMON_TYPES].filter(Boolean),
-            ),
-          );
+        : field === "pattern"
+          ? Array.from(
+              new Set(
+                [
+                  suggestedValue,
+                  currentValue,
+                  ...PATTERN_KEYWORDS.map(
+                    (p) => p.charAt(0).toUpperCase() + p.slice(1),
+                  ),
+                ].filter(Boolean),
+              ),
+            )
+          : field === "finish"
+            ? Array.from(
+                new Set(
+                  [
+                    suggestedValue,
+                    currentValue,
+                    ...FINISH_KEYWORDS.map(
+                      (f) => f.charAt(0).toUpperCase() + f.slice(1),
+                    ),
+                  ].filter(Boolean),
+                ),
+              )
+            : Array.from(
+                new Set(
+                  [suggestedValue, currentValue, ...COMMON_TYPES].filter(
+                    Boolean,
+                  ),
+                ),
+              );
+
+  const toggleField = (f: FixableSignal) => {
+    setSelectedFields((prev) => {
+      const next = new Set(prev);
+      if (next.has(f)) next.delete(f);
+      else next.add(f);
+      return next;
+    });
+  };
+
+  const primaryDisabled =
+    !!loading ||
+    (mode === "edit" && !editValue.trim()) ||
+    (mode === "applyAll" && selectedFixes.length === 0);
 
   return (
     <s-modal id={MODAL_ID} heading={heading} onHide={onCancel}>
@@ -135,64 +320,64 @@ export function FixModal({
         {mode === "applyAll" && (
           <>
             <s-paragraph>
-              These changes will update the real Shopify product:
+              Select which listing changes to apply. Each change is verified in
+              Shopify independently.
             </s-paragraph>
-            {fixes.map((fix) => (
-              <s-box
-                key={fix.field}
-                padding="base"
-                borderWidth="base"
-                borderRadius="base"
-                background="subdued"
-              >
-                <s-stack direction="inline" gap="base">
-                  <s-text type="strong">{fieldLabel(fix.field)}</s-text>
-                  <s-text>
-                    {fix.currentValue} → {fix.suggestedValue}
-                  </s-text>
-                </s-stack>
-              </s-box>
-            ))}
+            {fixes.map((fix) => {
+              const checked = selectedFields.has(fix.field);
+              const label = fieldLabel(fix.field, materialWriteMode);
+              return (
+                <div key={fix.field}>
+                  <s-box
+                    padding="base"
+                    borderWidth="base"
+                    borderRadius="base"
+                    background="subdued"
+                  >
+                    <s-stack direction="inline" gap="base">
+                      <input
+                        type="checkbox"
+                        id={`apply-all-${fix.field}`}
+                        checked={checked}
+                        disabled={!!loading}
+                        onChange={() => toggleField(fix.field)}
+                        aria-label={`Include ${label}`}
+                      />
+                      <div style={{ flex: 1 }}>
+                        <BeforeAfterRow
+                          field={fix.field}
+                          currentValue={fix.currentValue}
+                          proposedValue={fix.suggestedValue}
+                          materialWriteMode={materialWriteMode}
+                        />
+                      </div>
+                    </s-stack>
+                  </s-box>
+                </div>
+              );
+            })}
             <s-banner tone="warning">
               Updates run as one batch. Successful changes are kept if a later
               fix fails.
             </s-banner>
-            {fixes.some((f) => f.field === "material") && (
-              <s-banner tone="warning">
-                Material fixes rewrite the product title (Shopify has no
-                dedicated material field). Review the title after applying.
-              </s-banner>
-            )}
           </>
         )}
 
         {mode === "confirm" && field && (
           <>
             <s-paragraph>
-              {fieldLabel(field)} will be updated on the real Shopify product:
+              Review the change before updating your Shopify listing:
             </s-paragraph>
-            <s-box
-              padding="base"
-              borderWidth="base"
-              borderRadius="base"
-              background="subdued"
-            >
-              <s-stack direction="inline" gap="base">
-                <s-text type="strong">{currentValue}</s-text>
-                <s-text>→</s-text>
-                <s-text type="strong">{suggestedValue}</s-text>
-              </s-stack>
-            </s-box>
+            <BeforeAfterRow
+              field={field}
+              currentValue={currentValue}
+              proposedValue={suggestedValue}
+              materialWriteMode={materialWriteMode}
+            />
             <s-banner tone="warning">
-              This will update the actual Shopify product. You can change it
-              back manually if needed.
+              This updates the actual Shopify product. You can revert from
+              mutation history if needed.
             </s-banner>
-            {field === "material" && (
-              <s-banner tone="warning">
-                This will update your product title by replacing the material
-                word (Shopify has no dedicated material field).
-              </s-banner>
-            )}
           </>
         )}
 
@@ -201,6 +386,11 @@ export function FixModal({
             <s-paragraph>
               Current value: <s-text type="strong">{currentValue}</s-text>
             </s-paragraph>
+            {field === "material" && (
+              <s-banner tone="info">
+                {materialStorageExplanation(materialWriteMode)}
+              </s-banner>
+            )}
             <label
               htmlFor="guardian-edit-value"
               style={{ display: "block", fontWeight: 600, fontSize: 13 }}
@@ -234,7 +424,7 @@ export function FixModal({
               value={editValue}
               onChange={(e) => setEditValue(e.target.value)}
               disabled={!!loading}
-              aria-label={`New ${fieldLabel(field)}`}
+              aria-label={`New ${fieldLabel(field, materialWriteMode)}`}
               style={{
                 display: "block",
                 width: "100%",
@@ -249,11 +439,6 @@ export function FixModal({
               Saving updates the real Shopify product, then re-checks listing
               consistency.
             </s-banner>
-            {field === "material" && (
-              <s-banner tone="warning">
-                Saving rewrites the material word in your product title.
-              </s-banner>
-            )}
           </>
         )}
       </s-stack>
@@ -268,17 +453,21 @@ export function FixModal({
       <s-button
         slot="primary-action"
         variant="primary"
-        onClick={() =>
-          onConfirm(mode === "edit" ? editValue.trim() : undefined)
-        }
-        disabled={mode === "edit" && !editValue.trim()}
+        onClick={() => {
+          if (mode === "applyAll") {
+            onConfirm(undefined, selectedFixes);
+            return;
+          }
+          onConfirm(mode === "edit" ? editValue.trim() : undefined);
+        }}
+        disabled={primaryDisabled}
         {...(loading ? { loading: true } : {})}
       >
         {mode === "applyAll"
-          ? `Apply ${fixes.length} Fixes`
+          ? `Apply ${selectedFixes.length} selected`
           : mode === "edit"
             ? "Save"
-            : "Confirm Fix"}
+            : "Confirm fix"}
       </s-button>
     </s-modal>
   );

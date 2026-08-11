@@ -1,34 +1,92 @@
-# Visual Listing Guardian — Sellenvo Vision
+# Sellenvo Vision — Catalog Integrity for Shopify
 
-Shopify-embedded Computer Vision prototype that compares **listing claims** vs **visual evidence**, then applies a **real Admin API mutation** after merchant confirmation.
+Product listings sometimes claim one thing while the product image shows another.
 
-## Golden path
+**Sellenvo Vision** is a Shopify Catalog Integrity app that:
+
+1. Scans product images
+2. Compares visual evidence to listing claims (color, product type, material, …)
+3. Shows merchants what needs attention — with evidence
+4. Lets merchants confirm corrections
+5. Applies verified Shopify mutations with an audit trail
+
+It is **not** an AI tagging/enrichment toy. It is a conservative integrity loop:
 
 ```text
-Real Shopify product → real image → Groq vision analysis →
-consistency check → evidence → merchant confirms →
-productOptionUpdate → re-fetch verification
+Listing → Visual evidence → Compare → Merchant decision → Safe mutation → Verify → Audit
 ```
 
-## Stack
+---
 
-| Layer | Choice |
-|-------|--------|
-| App | Shopify React Router template |
-| UI | Polaris web components |
-| Vision | Groq `qwen/qwen3.6-27b` (free tier) + Zod validation |
-| Pixel (optional) | colorthief + sharp |
-| Storage | Prisma SQLite (sessions only) |
+## Why it matters
 
-## Setup (one day)
+Inconsistent listings create returns, support tickets, and lost trust.
 
-### 1. Prerequisites
+Sellenvo helps merchants answer:
+
+> What is wrong, why do we think that, what will change if I click Fix, and did Shopify actually update?
+
+---
+
+## Merchant flow
+
+```text
+Catalog Health
+  → listing needs attention
+  → evidence (listed vs detected)
+  → review proposed change
+  → confirm
+  → Shopify verified
+  → audit recorded
+```
+
+Primary screen: **Catalog Health** — “What needs my attention?”
+
+Per-product screen: **Guardian** — evidence, Apply Fix, Manual Edit, Apply All (safe / review).
+
+---
+
+## Demo
+
+Use **Seed demo catalog** in Catalog Health (explicitly labeled `[Demo]` products):
+
+| Case | What it shows |
+|------|----------------|
+| Correct black wallet | Healthy match |
+| Red listing + black image | Color mismatch (golden path) |
+| Plastic title + leather-looking image | Material review |
+| Bag type + wallet-like image | Product type review |
+| No image | Graceful failure |
+
+Or create a single golden-path product: **Create Demo Product B**.
+
+---
+
+## Attribute status
+
+| Attribute | Status | Storage | Fix policy |
+|-----------|--------|---------|------------|
+| Color | PRODUCTION | Shopify Color option | Safe (only if shop enables auto-fix) |
+| Product type | PRODUCTION | `productType` | Confirm |
+| Material | PRODUCTION | `sellenvo.material` metafield (default) | Confirm |
+| Pattern | EXPERIMENTAL | `sellenvo.pattern` | Confirm |
+| Finish | EXPERIMENTAL | `sellenvo.finish` | Confirm |
+
+Pattern/Finish stay experimental until evaluation evidence justifies promotion.
+
+**Internal evaluation only** — model confidence is not claimed accuracy. See [docs/EVALUATION.md](docs/EVALUATION.md).
+
+---
+
+## Setup
+
+### Prerequisites
 
 - Node.js ≥ 20.19 (or ≥ 22.12)
 - Shopify Partner account + development store
-- Free Groq API key: https://console.groq.com
+- Groq API key: https://console.groq.com
 
-### 2. Install
+### Install & run
 
 ```bash
 cd sellenvo-vision
@@ -36,93 +94,102 @@ npm install
 npx prisma generate
 cp .env.example .env
 # Add GROQ_API_KEY=... to .env
+
+npm run dev
 ```
 
-Optional pixel analysis:
+This app registers **webhooks**, so the default uses a Cloudflare tunnel (Shopify cannot
+deliver webhooks to `localhost`).
+
+**Always open the app via the Preview URL** printed in the terminal:
+
+```text
+https://admin.shopify.com/store/<your-store>/apps/<app-id>
+```
+
+Do **not** open or bookmark the raw `*.trycloudflare.com` URL — those hostnames are
+ephemeral and often fail DNS (“server IP address could not be found”).
+
+If the tunnel DNS fails:
+
+1. Press `q` to quit
+2. Run `npm run dev` again (gets a **new** tunnel hostname)
+3. Open the new **Preview URL** from Shopify Admin
+
+Scopes: `read_products,write_products`.
+
+Optional: `OPENROUTER_API_KEY` for secondary vision fallback.
+
+### Localhost-only (UI smoke test)
 
 ```bash
-npm install colorthief sharp
+npm run dev:localhost
 ```
 
-If `sharp` fails on Windows within ~15 minutes, skip it — vision-only mode is sufficient.
+Works for many UI flows, but **cannot** register webhooks / App Proxy / Flow. Prefer
+`npm run dev` for normal Catalog Integrity testing.
 
-### 3. Link & run
+---
 
-```bash
-shopify app config link   # or shopify app dev (will prompt)
-shopify app dev
-```
+## Stack
 
-Scopes required: `read_products,write_products` (already in `shopify.app.toml`).
+| Layer | Choice |
+|-------|--------|
+| App | Shopify React Router + Vite |
+| UI | Polaris web components |
+| Vision | Groq (primary) + optional OpenRouter fallback |
+| Validation | Zod |
+| Storage | Prisma + SQLite (single-instance pilot) |
+| Jobs | DB-backed in-process poller |
 
-### 4. Create demo Product B (golden path)
+SQLite stores sessions **and** analyses, scan jobs, audit events, shop settings, and feedback. PostgreSQL is a documented migration path when multi-instance scale is required — not needed for pilot.
 
-In Shopify Admin:
-
-1. **Products → Add product**
-2. Title: `Red Leather Wallet`
-3. Product type: `Wallet`
-4. Variants → add option **Color** = `Red`
-5. Upload a clearly **BLACK** wallet image
-6. Save
-
-Record GIDs in GraphiQL (see `scripts/demo-products.ts`), then **test** `productOptionUpdate` in GraphiQL before relying on the app UI. Reset Color to `Red` after testing.
-
-### 5. Demo flow
-
-1. Open the app → Products list → **Open Guardian** on Product B
-2. Click **Analyze Product**
-3. See Color Mismatch (Listed: Red, Detected: Black) + derived confidence
-4. **View Evidence** → **Apply Fix** → Confirm
-5. App re-fetches product and verifies Color is now Black
-6. Confirm in Shopify Admin product page
+---
 
 ## Routes
 
 | Path | Purpose |
 |------|---------|
-| `/app` | Product list |
-| `/app/guardian/:productId` | Analyze + fix (numeric ID or full GID) |
+| `/app` | Catalog Health inbox |
+| `/app/guardian/:productId` | Per-product Guardian |
+| `/app/settings` | Material write mode, auto-scan, safe auto-fix |
+
+---
 
 ## Documentation
 
 | Doc | Contents |
 |-----|----------|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System layers, domain model, ADRs |
-| [docs/AI_PIPELINE.md](docs/AI_PIPELINE.md) | Models, prompts, sanitization, timeouts |
-| [docs/MUTATIONS.md](docs/MUTATIONS.md) | Shopify write safety |
-| [docs/MUTATION_CHECKLIST.md](docs/MUTATION_CHECKLIST.md) | GraphiQL preflight |
-| [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md) | Troubleshooting & ops |
-| [docs/EVALUATION.md](docs/EVALUATION.md) | Real-image accuracy eval (not unit tests) |
+| [PRIVACY.md](PRIVACY.md) | Data collection, AI providers, retention, GDPR |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System architecture |
+| [docs/AI_PIPELINE.md](docs/AI_PIPELINE.md) | Vision pipeline |
+| [docs/MUTATIONS.md](docs/MUTATIONS.md) | Mutation safety |
+| [docs/EVALUATION.md](docs/EVALUATION.md) | Evaluation methodology |
+| [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md) | Ops troubleshooting |
+| [docs/CATALOG_INTEGRITY.md](docs/CATALOG_INTEGRITY.md) | Product model |
+
+---
 
 ## Tests
 
 ```bash
-npm run test:consistency   # deterministic engine + contract tests (CI)
+npm run test:consistency   # deterministic engine (CI)
+npm run test:registry      # attribute registry + policy
+npm run test:mutations     # mocked Shopify mutations
 npm run typecheck
-npm run test:vision        # optional live Groq smoke (needs GROQ_API_KEY)
+npm run lint
+npm run build
 ```
 
-## Environment
+Optional live vision: `npm run test:vision` (requires `GROQ_API_KEY`).
 
-| Variable | Required | Purpose |
-|----------|----------|---------|
-| `GROQ_API_KEY` | Yes (for analysis) | Vision API (primary) |
-| `GROQ_API_KEY_FALLBACK` | Optional | Second Groq key when primary rate-limits |
-| `SHOPIFY_*` / `SCOPES` | Via CLI | OAuth |
-| `DEMO_BLACK_WALLET_IMAGE_URL` | Optional | Demo image attach |
-| `TEST_IMAGE_URL` | Optional | Vision smoke override |
+Eval scorecard (internal): `npx tsx scripts/eval-scorecard.ts`
 
-## Fallbacks
+---
 
-- Groq down → analysis fails safely with toast; retry later (OpenRouter is documented in `.env.example` but not wired)
-- colorthief/sharp fail → automatic skip, vision-only
-- Mutation shape issues → test in GraphiQL first; see `docs/MUTATION_CHECKLIST.md`
+## Known limitations (honest)
 
-## Security
-
-- AI keys only on the server (`GROQ_API_KEY`)
-- Mutations require explicit merchant confirmation
-- Server re-verifies product after write
-- Vision output treated as untrusted; consistency engine is deterministic
-- Rate limit: 5 mutations per minute per product
+- Color analysis uses the **first** Color option value only (multi-variant UI warns)
+- Vision cache and mutation rate limits are process-local (single-instance pilot)
+- Pattern/Finish are experimental and gated by settings
+- No fabricated return/revenue metrics — only measured internal evaluation

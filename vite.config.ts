@@ -37,7 +37,9 @@ if (host === "localhost") {
 
 export default defineConfig({
   server: {
-    allowedHosts: [host],
+    // Allow dynamic Cloudflare tunnel hosts when using `npm run dev:tunnel`.
+    // Default `npm run dev` uses --use-localhost (no trycloudflare DNS).
+    allowedHosts: [host, ".trycloudflare.com", "localhost"],
     cors: {
       preflightContinue: true,
     },
