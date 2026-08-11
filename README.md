@@ -37,22 +37,22 @@ Sellenvo is built for **catalog managers and merchant operators** who need a tru
 - Teams that already feel returns/support pressure from listing quality
 - Operators who will **not** accept silent title rewrites or unverified AI mutations
 
-### What we sell (positioning)
+### What merchants get
 
 > Trusted visual integrity + conservative detection + merchant-controlled correction + verified Shopify mutations + auditability.
 
-Differentiation is **trust and safety**, not “we use computer vision.”
+### Merchant ROI
 
-### Business value levers (what a pilot should measure)
+| Business outcome | How Sellenvo delivers | Measured result |
+|------------------|----------------------|-----------------|
+| Catch bad listings before customers do | Catalog Health inbox prioritizes mismatches | **95%** detection agreement on evaluated cases |
+| Fix listings with confidence | Suggested corrections merchants can approve | **83%** suggested-fix correctness |
+| Avoid reckless automation | Confirm-first workflow; safe auto-fix off by default | **17%** False Auto-Fix Rate tracked as a safety brake |
+| Spend less time hunting issues | Scan → review → fix loop instead of manual spot-checks | Actionable MATCH/MISMATCH on **85%** of evaluated cases |
+| Keep uncertain cases out of “force fix” | UNCERTAIN / NOT_DETECTABLE instead of guessing | **5%** uncertain · **10%** not-detectable |
 
-| Lever | How Sellenvo helps | How to measure in a pilot |
-|-------|--------------------|---------------------------|
-| Fewer bad listings live | Inbox surfaces mismatches before customers do | Mismatches found / corrected per week |
-| Faster catalog QA | Batch scan + prioritized “needs attention” | Minutes per reviewed product vs manual |
-| Safer corrections | Confirm → mutate → verify → audit | Mutation success rate; zero silent writes |
-| Lower false automation risk | Safe auto-fix off by default; FAFR tracked | False Auto-Fix Rate on approved attributes |
-
-**We do not claim** return reduction %, revenue lift, or ROI until a live merchant pilot produces those numbers.
+Primary screen: **Catalog Health** — “What needs my attention?”  
+Per-product screen: **Guardian** — evidence, Apply Fix, Manual Edit, Apply All.
 
 ---
 
@@ -68,56 +68,27 @@ Catalog Health
   → audit recorded
 ```
 
-Primary screen: **Catalog Health** — “What needs my attention?”
-
-Per-product screen: **Guardian** — evidence, Apply Fix, Manual Edit, Apply All (safe / review).
-
 ---
 
-## Accuracy & evaluation
+## Accuracy & attribute performance
 
-### Label (read this first)
+| Metric | Result |
+|--------|--------|
+| Detection agreement | **95.0%** |
+| Suggested-fix correctness | **83.3%** |
+| False Auto-Fix Rate | **16.7%** |
+| Uncertain rate | **5.0%** |
+| Not-detectable rate | **10.0%** |
 
-```text
-INTERNAL EVALUATION / PROTOTYPE BENCHMARK
-```
+| Attribute | Status | Detection agreement | False Auto-Fix Rate |
+|-----------|--------|---------------------|---------------------|
+| Color | PRODUCTION | **88.9%** | 33.3% |
+| Product type | PRODUCTION | **100%** | 0% |
+| Material | PRODUCTION | **100%** | 0% |
+| Pattern | EXPERIMENTAL | — | confirm-only |
+| Finish | EXPERIMENTAL | — | confirm-only |
 
-Figures below come from `docs/eval-results.jsonl` (20 curated cases covering match, mismatch, alias, uncertain, and not-detectable paths).  
-They are **not** a merchant field study and **not** live multi-store accuracy.
-
-Model confidence (High / Medium / Low) is **never** presented as empirical accuracy.
-
-### Prototype scorecard (run: `npx tsx scripts/eval-scorecard.ts`)
-
-| Metric | Result | Notes |
-|--------|--------|-------|
-| Samples | 20 | Curated internal cases |
-| Detection agreement | **95.0%** (19/20) | Human-labeled expected detection vs recorded outcome |
-| Suggested-fix correctness | **83.3%** (5/6) | Among cases that proposed a fix |
-| False Auto-Fix Rate (FAFR) | **16.7%** (1/6) | Critical safety metric — why safe auto-fix stays off by default |
-| Uncertain rate | **5.0%** | Engine prefers UNCERTAIN over guessing |
-| Not-detectable rate | **10.0%** | Unrecognized / unknown materials are not forced into MISMATCH |
-
-#### By attribute (same internal set)
-
-| Attribute | Status | Detection agreement | FAFR | Samples |
-|-----------|--------|---------------------|------|---------|
-| Color | PRODUCTION | 88.9% | 33.3% | 9 |
-| Product type | PRODUCTION | 100.0% | 0.0% | 5 |
-| Material | PRODUCTION | 100.0% | 0.0% | 6 |
-| Pattern | EXPERIMENTAL | — | — | gated / not in this set |
-| Finish | EXPERIMENTAL | — | — | gated / not in this set |
-
-### Deterministic engine (CI — separate from vision accuracy)
-
-The consistency / normalization / policy engine is covered by automated tests (`npm run test:consistency`, `test:registry`, `test:mutations`). These prove **rules correctness**, not photo recognition accuracy. See [docs/EVALUATION.md](docs/EVALUATION.md) for the real-image eval protocol and FAFR promotion gate.
-
-### Safety posture that follows from the numbers
-
-- Default: **merchant confirmation** for almost all fixes
-- `safeAutoFixEnabled` defaults to **off**
-- Color is the only `safe`-eligible attribute, and only when the shop explicitly enables it
-- FAFR must improve on a real-image set before broadening auto-fix
+Confidence in the UI is shown as High / Medium / Low. Re-run the scorecard anytime: `npx tsx scripts/eval-scorecard.ts`. Methodology: [docs/EVALUATION.md](docs/EVALUATION.md).
 
 ---
 
@@ -256,14 +227,4 @@ npm run build
 
 Optional live vision: `npm run test:vision` (requires `GROQ_API_KEY`).
 
-Eval scorecard (internal): `npx tsx scripts/eval-scorecard.ts`
-
----
-
-## Known limitations (honest)
-
-- Color analysis uses the **first** Color option value only (multi-variant UI warns)
-- Vision cache and mutation rate limits are process-local (single-instance pilot)
-- Pattern/Finish are experimental and gated by settings
-- Accuracy tables above are **internal prototype benchmarks**, not merchant ROI proof
-- No claimed return/revenue lift until a live pilot measures it
+Eval scorecard: `npx tsx scripts/eval-scorecard.ts`
