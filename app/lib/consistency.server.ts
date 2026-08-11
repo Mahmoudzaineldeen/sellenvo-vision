@@ -14,15 +14,26 @@ import {
   materialsMatch,
   normalizeMaterialName,
 } from "./materials";
+import {
+  getAttribute,
+  isRecognizedPattern,
+  isRecognizedFinish,
+  normalizePatternName,
+  normalizeFinishName,
+  patternsMatch,
+  finishesMatch,
+} from "./attributes";
 
 const CONFIDENCE_THRESHOLD = 0.7;
 
 const RECOGNIZED_MATERIALS = new Set<string>(MATERIAL_KEYWORDS);
 
-const BASE_WEIGHTS: Record<"color" | "productType" | "material", number> = {
+const BASE_WEIGHTS: Record<string, number> = {
   color: 0.5,
   productType: 0.25,
   material: 0.25,
+  pattern: 0.15,
+  finish: 0.15,
 };
 
 export {
@@ -53,7 +64,13 @@ export function computeHealthScore(
   confidence: number,
 ): number {
   if (verdict === "MATCH") return 100;
-  if (verdict === "UNCERTAIN") return 75;
+  if (
+    verdict === "UNCERTAIN" ||
+    verdict === "NOT_DETECTABLE" ||
+    verdict === "NOT_APPLICABLE"
+  ) {
+    return 75;
+  }
   return Math.round(100 - confidence * 50);
 }
 
@@ -103,11 +120,33 @@ export function replaceMaterialInTitle(
   });
 }
 
+/**
+ * Dual-read material claim: metafield preferred, title keyword fallback.
+ */
+export function resolveClaimedMaterial(args: {
+  title: string;
+  metafieldValue?: string | null;
+}): { claimedMaterial: string | null; materialSource: "metafield" | "title" | null } {
+  const fromMeta = args.metafieldValue?.trim();
+  if (fromMeta) {
+    return {
+      claimedMaterial: normalizeMaterialName(fromMeta),
+      materialSource: "metafield",
+    };
+  }
+  const fromTitle = extractMaterialFromTitle(args.title);
+  if (fromTitle) {
+    return { claimedMaterial: fromTitle, materialSource: "title" };
+  }
+  return { claimedMaterial: null, materialSource: null };
+}
+
 function pushIssue(
   issues: ConsistencyIssue[],
   result: SignalResult,
 ): void {
-  if (result.verdict === "MATCH") return;
+  // NOT_DETECTABLE / NOT_APPLICABLE never become mismatch issues
+  if (result.verdict !== "MISMATCH" && result.verdict !== "UNCERTAIN") return;
   if (result.confidence === null || result.detected === null) return;
   issues.push({
     signal: result.signal,
@@ -119,17 +158,60 @@ function pushIssue(
   });
 }
 
+function evaluateSignal(args: {
+  signal: SignalResult["signal"];
+  claimed: string;
+  detectedRaw: string;
+  confidence: number;
+  match: (a: string, b: string) => boolean;
+  normalizeDetected: (raw: string) => string;
+  matchEvidence: string;
+  mismatchPrefix: string;
+  uncertainPrefix: string;
+  threshold?: number;
+}): SignalResult {
+  const threshold = args.threshold ?? CONFIDENCE_THRESHOLD;
+  const detected = args.normalizeDetected(args.detectedRaw);
+  const matched = args.match(args.claimed, args.detectedRaw);
+
+  let verdict: Verdict;
+  let evidence: string;
+
+  if (matched) {
+    verdict = "MATCH";
+    evidence = args.matchEvidence;
+  } else if (args.confidence >= threshold) {
+    verdict = "MISMATCH";
+    evidence = `${args.mismatchPrefix} (vision confidence ${Math.round(args.confidence * 100)}%).`;
+  } else {
+    verdict = "UNCERTAIN";
+    evidence = args.uncertainPrefix;
+  }
+
+  return {
+    signal: args.signal,
+    claimed: args.claimed,
+    detected,
+    confidence: args.confidence,
+    verdict,
+    evidence,
+  };
+}
+
 /**
  * Evaluate each available signal independently.
  * Missing signals are omitted from both signalResults and issues.
  * MATCH results appear only in signalResults.
+ * UNCERTAIN / NOT_DETECTABLE never become MISMATCH.
  */
 export function evaluateConsistency(
   listing: ListingFacts,
   visual: VisualFacts,
+  opts?: { includeExperimental?: boolean },
 ): { signalResults: SignalResult[]; issues: ConsistencyIssue[] } {
   const signalResults: SignalResult[] = [];
   const issues: ConsistencyIssue[] = [];
+  const includeExperimental = opts?.includeExperimental === true;
 
   // --- Color signal ---
   if (listing.claimedColor) {
@@ -224,11 +306,25 @@ export function evaluateConsistency(
     visionMaterialConfidence !== null
   ) {
     const detected = normalizeMaterialName(visionMaterialRaw);
+    const rawLower = visionMaterialRaw.toLowerCase().trim();
+    // Explicit not_detectable → surface as NOT_DETECTABLE (never MISMATCH)
+    if (rawLower === "not_detectable") {
+      signalResults.push({
+        signal: "material",
+        claimed: listing.claimedMaterial,
+        detected: "not_detectable",
+        confidence: visionMaterialConfidence,
+        verdict: "NOT_DETECTABLE",
+        evidence:
+          "Could not confidently determine the material from this image.",
+      });
+    } else {
     const recognized =
       detected !== "" &&
       detected !== "unknown" &&
       RECOGNIZED_MATERIALS.has(detected);
 
+    // Unrecognized / unknown → omit signal (backward-compatible; avoids false MISMATCH)
     if (recognized) {
       const claimed = listing.claimedMaterial.toLowerCase().trim();
       const confidence = visionMaterialConfidence;
@@ -259,6 +355,91 @@ export function evaluateConsistency(
       signalResults.push(matResult);
       pushIssue(issues, matResult);
     }
+    } // end else (not explicit not_detectable)
+  }
+
+  // --- Pattern (EXPERIMENTAL) ---
+  if (
+    includeExperimental &&
+    getAttribute("pattern")?.status === "EXPERIMENTAL" &&
+    listing.claimedPattern
+  ) {
+    const raw = visual.visionPattern ?? null;
+    const conf = visual.visionPatternConfidence ?? null;
+    if (raw && conf !== null) {
+      const detected = normalizePatternName(raw);
+      if (
+        detected === "unknown" ||
+        detected === "not_detectable" ||
+        !isRecognizedPattern(detected)
+      ) {
+        signalResults.push({
+          signal: "pattern",
+          claimed: listing.claimedPattern,
+          detected,
+          confidence: conf,
+          verdict: "NOT_DETECTABLE",
+          evidence: "Could not confidently determine the pattern from this image.",
+        });
+      } else {
+        const result = evaluateSignal({
+          signal: "pattern",
+          claimed: listing.claimedPattern,
+          detectedRaw: detected,
+          confidence: conf,
+          match: patternsMatch,
+          normalizeDetected: normalizePatternName,
+          matchEvidence: `Pattern matches: "${listing.claimedPattern}".`,
+          mismatchPrefix: `Pattern mismatch: listing "${listing.claimedPattern}" vs detected "${detected}"`,
+          uncertainPrefix: `Low confidence pattern comparison: listing "${listing.claimedPattern}" vs detected "${detected}".`,
+          threshold: getAttribute("pattern")?.confidenceThreshold,
+        });
+        signalResults.push(result);
+        pushIssue(issues, result);
+      }
+    }
+  }
+
+  // --- Finish (EXPERIMENTAL) ---
+  if (
+    includeExperimental &&
+    getAttribute("finish")?.status === "EXPERIMENTAL" &&
+    listing.claimedFinish
+  ) {
+    const raw = visual.visionFinish ?? null;
+    const conf = visual.visionFinishConfidence ?? null;
+    if (raw && conf !== null) {
+      const detected = normalizeFinishName(raw);
+      if (
+        detected === "unknown" ||
+        detected === "not_detectable" ||
+        !isRecognizedFinish(detected)
+      ) {
+        signalResults.push({
+          signal: "finish",
+          claimed: listing.claimedFinish,
+          detected,
+          confidence: conf,
+          verdict: "NOT_DETECTABLE",
+          evidence: "Could not confidently determine the finish from this image.",
+        });
+      } else {
+        const result = evaluateSignal({
+          signal: "finish",
+          claimed: listing.claimedFinish,
+          detectedRaw: detected,
+          confidence: conf,
+          match: finishesMatch,
+          normalizeDetected: normalizeFinishName,
+          matchEvidence: `Finish matches: "${listing.claimedFinish}".`,
+          mismatchPrefix: `Finish mismatch: listing "${listing.claimedFinish}" vs detected "${detected}"`,
+          uncertainPrefix: `Low confidence finish comparison: listing "${listing.claimedFinish}" vs detected "${detected}".`,
+          threshold: getAttribute("finish")?.confidenceThreshold,
+        });
+        signalResults.push(result);
+        pushIssue(issues, result);
+      }
+    }
   }
 
   return { signalResults, issues };
@@ -267,48 +448,64 @@ export function evaluateConsistency(
 /**
  * Dynamic weight redistribution among available signals.
  * Image quality is NEVER included.
+ * NOT_DETECTABLE / NOT_APPLICABLE signals do not contribute to overall confidence.
  */
 export function computeOverallConfidence(
   signalResults: SignalResult[],
 ): number {
   const available = signalResults.filter(
-    (s) => s.confidence !== null && s.signal in BASE_WEIGHTS,
+    (s) =>
+      s.confidence !== null &&
+      s.signal in BASE_WEIGHTS &&
+      s.verdict !== "NOT_DETECTABLE" &&
+      s.verdict !== "NOT_APPLICABLE",
   );
   if (available.length === 0) return 0;
 
   const totalBase = available.reduce(
-    (sum, s) => sum + BASE_WEIGHTS[s.signal],
+    (sum, s) => sum + (BASE_WEIGHTS[s.signal] ?? 0),
     0,
   );
   if (totalBase === 0) return 0;
 
   return available.reduce((sum, s) => {
-    const weight = BASE_WEIGHTS[s.signal] / totalBase;
+    const weight = (BASE_WEIGHTS[s.signal] ?? 0) / totalBase;
     return sum + (s.confidence as number) * weight;
   }, 0);
 }
 
 function computeOverallVerdict(
   issues: ConsistencyIssue[],
+  signalResults: SignalResult[],
   imageQuality: "good" | "fair" | "poor",
 ): Verdict {
   if (imageQuality === "poor") return "UNCERTAIN";
   if (issues.some((i) => i.verdict === "MISMATCH")) return "MISMATCH";
   if (issues.some((i) => i.verdict === "UNCERTAIN")) return "UNCERTAIN";
-  return "MATCH";
+  const applicable = signalResults.filter(
+    (s) => s.verdict !== "NOT_APPLICABLE" && s.verdict !== "NOT_DETECTABLE",
+  );
+  if (applicable.length === 0) return "UNCERTAIN";
+  if (applicable.every((s) => s.verdict === "MATCH")) return "MATCH";
+  return "UNCERTAIN";
 }
 
-/**
- * Build a full AnalysisResult from listing + visual facts and optional fix IDs.
- */
-export function buildAnalysisResultV2(args: {
+export type BuildAnalysisOptions = {
   listing: ListingFacts;
   visual: VisualFacts;
   imageUrl: string;
   productId: string;
   colorOptionId?: string;
   colorOptionValueId?: string;
-}): AnalysisResult {
+  /** When false (default), material fix only via metafield — title rewrite not required */
+  materialWriteMode?: "metafield" | "title" | "both";
+  includeExperimental?: boolean;
+};
+
+/**
+ * Build a full AnalysisResult from listing + visual facts and optional fix IDs.
+ */
+export function buildAnalysisResultV2(args: BuildAnalysisOptions): AnalysisResult {
   const {
     listing,
     visual,
@@ -316,11 +513,19 @@ export function buildAnalysisResultV2(args: {
     productId,
     colorOptionId,
     colorOptionValueId,
+    materialWriteMode = "metafield",
+    includeExperimental = false,
   } = args;
 
-  const { signalResults, issues } = evaluateConsistency(listing, visual);
+  const { signalResults, issues } = evaluateConsistency(listing, visual, {
+    includeExperimental,
+  });
   let overallConfidence = computeOverallConfidence(signalResults);
-  let overallVerdict = computeOverallVerdict(issues, visual.imageQuality);
+  let overallVerdict = computeOverallVerdict(
+    issues,
+    signalResults,
+    visual.imageQuality,
+  );
 
   let imageQualityNote: string | null = null;
   if (visual.imageQuality === "fair") {
@@ -402,21 +607,59 @@ export function buildAnalysisResultV2(args: {
     materialSignal.confidence >= CONFIDENCE_THRESHOLD &&
     visual.imageQuality !== "poor" &&
     listing.claimedMaterial &&
-    materialSignal.detected &&
-    // Title is the canonical material claim in this app — only offer a fix
-    // when the claimed token is actually present for a safe title rewrite.
-    replaceMaterialInTitle(
-      listing.productTitle,
-      listing.claimedMaterial,
-      materialSignal.detected,
-    ) !== null
+    materialSignal.detected
   ) {
-    suggestedFixes.push({
-      field: "material",
-      currentValue: capitalizeLabel(listing.claimedMaterial),
-      suggestedValue: capitalizeLabel(materialSignal.detected),
-      productId,
-    });
+    const needsTitle =
+      materialWriteMode === "title" || materialWriteMode === "both";
+    const titleOk =
+      !needsTitle ||
+      replaceMaterialInTitle(
+        listing.productTitle,
+        listing.claimedMaterial,
+        materialSignal.detected,
+      ) !== null;
+    // Metafield-first: always allow material fix suggestion when metafield mode
+    const metafieldOk =
+      materialWriteMode === "metafield" || materialWriteMode === "both";
+
+    if (metafieldOk || titleOk) {
+      suggestedFixes.push({
+        field: "material",
+        currentValue: capitalizeLabel(listing.claimedMaterial),
+        suggestedValue: capitalizeLabel(materialSignal.detected),
+        productId,
+      });
+    }
+  }
+
+  if (includeExperimental) {
+    for (const field of ["pattern", "finish"] as const) {
+      const issue = issues.find(
+        (i) => i.signal === field && i.verdict === "MISMATCH",
+      );
+      const signal = signalResults.find((s) => s.signal === field);
+      const threshold =
+        getAttribute(field)?.confidenceThreshold ?? CONFIDENCE_THRESHOLD;
+      if (
+        issue &&
+        signal &&
+        signal.confidence !== null &&
+        signal.confidence >= threshold &&
+        visual.imageQuality !== "poor" &&
+        signal.detected
+      ) {
+        const claimed =
+          field === "pattern" ? listing.claimedPattern : listing.claimedFinish;
+        if (claimed) {
+          suggestedFixes.push({
+            field,
+            currentValue: capitalizeLabel(claimed),
+            suggestedValue: capitalizeLabel(signal.detected),
+            productId,
+          });
+        }
+      }
+    }
   }
 
   return {
@@ -435,27 +678,44 @@ export function buildAnalysisResultV2(args: {
 
 /**
  * Extract ListingFacts from a Shopify product's title/type/options.
+ * Optional metafield values enable material/pattern/finish dual-read.
  */
-export function extractListingFacts(product: {
-  title: string;
-  productType?: string | null;
-  options: Array<{ name: string; optionValues: Array<{ name: string }> }>;
-}): ListingFacts {
+export function extractListingFacts(
+  product: {
+    title: string;
+    productType?: string | null;
+    options: Array<{ name: string; optionValues: Array<{ name: string }> }>;
+  },
+  metafields?: {
+    material?: string | null;
+    pattern?: string | null;
+    finish?: string | null;
+  },
+): ListingFacts {
   const colorOption = product.options.find(
     (o) => o.name.toLowerCase() === "color" || o.name.toLowerCase() === "colour",
   );
   const claimedColor = colorOption?.optionValues[0]?.name ?? null;
 
+  const { claimedMaterial, materialSource } = resolveClaimedMaterial({
+    title: product.title,
+    metafieldValue: metafields?.material,
+  });
+
   return {
     claimedColor,
     productTitle: product.title,
     productType: product.productType ?? null,
-    claimedMaterial: extractMaterialFromTitle(product.title),
+    claimedMaterial,
+    materialSource,
+    claimedPattern: metafields?.pattern?.trim() || null,
+    claimedFinish: metafields?.finish?.trim() || null,
   };
 }
 
 /**
  * Find the Color option + first value IDs for mutation targeting.
+ * Limitation: uses option value[0] only — multi-variant color not yet solved.
  */
 export function findColorOptionIds(product: {
   options: Array<{

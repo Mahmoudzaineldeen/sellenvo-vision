@@ -5,30 +5,117 @@ generator client {
   provider = "prisma-client-js"
 }
 
-// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
-// enough when changing adapters.
-// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
 datasource db {
   provider = "sqlite"
   url      = "file:dev.sqlite"
 }
 
 model Session {
-  id            String    @id
-  shop          String
-  state         String
-  isOnline      Boolean   @default(false)
-  scope         String?
-  expires       DateTime?
-  accessToken   String
-  userId        BigInt?
-  firstName     String?
-  lastName      String?
-  email         String?
-  accountOwner  Boolean   @default(false)
-  locale        String?
-  collaborator  Boolean?  @default(false)
-  emailVerified Boolean?  @default(false)
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
   refreshToken        String?
   refreshTokenExpires DateTime?
+}
+
+/// Persisted catalog integrity analysis (no image blobs — URL + hash only)
+model Analysis {
+  id                 String   @id @default(cuid())
+  shop               String
+  productId          String
+  productTitle       String?
+  imageUrl           String?
+  imageHash          String?
+  listingFingerprint String?
+  visualJson         String
+  listingJson        String
+  verdict            String
+  healthScore        Int
+  overallConfidence  Float
+  issuesJson         String
+  signalResultsJson  String
+  suggestedFixesJson String
+  source             String   @default("full")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([shop, createdAt])
+  @@index([shop, productId])
+  @@index([shop, verdict])
+  @@index([shop, healthScore])
+}
+
+model ScanJob {
+  id          String    @id @default(cuid())
+  shop        String
+  productId   String
+  status      String    @default("queued") // queued|running|done|failed|cancelled
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(3)
+  error       String?
+  dedupeKey   String?
+  priority    Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  startedAt   DateTime?
+  finishedAt  DateTime?
+
+  @@index([shop, status])
+  @@index([status, priority, createdAt])
+  @@unique([shop, dedupeKey])
+}
+
+model AuditEvent {
+  id         String   @id @default(cuid())
+  shop       String
+  productId  String
+  userId     String?
+  attribute  String
+  oldValue   String?
+  newValue   String?
+  reason     String?
+  confidence Float?
+  success    Boolean
+  error      String?
+  metaJson   String?
+  createdAt  DateTime @default(now())
+
+  @@index([shop, createdAt])
+  @@index([shop, productId])
+}
+
+model ShopSettings {
+  shop                      String   @id
+  materialWriteMode         String   @default("metafield") // metafield|title|both
+  autoScanOnCreate          Boolean  @default(true)
+  safeAutoFixEnabled        Boolean  @default(false)
+  showExperimentalAttributes Boolean @default(false)
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+}
+
+/// Merchant feedback: "Vision was wrong"
+model VisionFeedback {
+  id         String   @id @default(cuid())
+  shop       String
+  productId  String
+  analysisId String?
+  attribute  String?
+  note       String?
+  createdAt  DateTime @default(now())
+
+  @@index([shop, createdAt])
+  @@index([shop, productId])
 }

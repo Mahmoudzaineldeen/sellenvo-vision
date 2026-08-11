@@ -107,7 +107,8 @@ npm run test:vision        # optional live Groq smoke (needs GROQ_API_KEY)
 
 | Variable | Required | Purpose |
 |----------|----------|---------|
-| `GROQ_API_KEY` | Yes (for analysis) | Vision API |
+| `GROQ_API_KEY` | Yes (for analysis) | Vision API (primary) |
+| `GROQ_API_KEY_FALLBACK` | Optional | Second Groq key when primary rate-limits |
 | `SHOPIFY_*` / `SCOPES` | Via CLI | OAuth |
 | `DEMO_BLACK_WALLET_IMAGE_URL` | Optional | Demo image attach |
 | `TEST_IMAGE_URL` | Optional | Vision smoke override |

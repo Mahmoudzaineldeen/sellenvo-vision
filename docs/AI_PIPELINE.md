@@ -4,8 +4,9 @@
 
 | Priority | Model |
 |----------|-------|
-| Primary | `qwen/qwen3.6-27b` (`reasoning_effort: none`) |
-| Fallback | `meta-llama/llama-4-scout-17b-16e-instruct` |
+| Primary | `qwen/qwen3.6-27b` (`reasoning_effort: none`, JSON mode preferred) |
+| Fallback | Same model with alternate strategies (HTTPS URL → data URI; json → text). Llama 4 Scout was deprecated Jul 2026. |
+| Timeout | 60s per Groq call |
 
 Each model is tried with JSON mode off, then on (up to 4 attempts).
 

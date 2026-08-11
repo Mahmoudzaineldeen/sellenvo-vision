@@ -9,11 +9,18 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import {
+  analysisFromPersistedRow,
   getImageUrl,
+  hydrateVisualCacheFromDb,
   isPlaceholderImage,
   runFullAnalysis,
   runListingRecheck,
 } from "../lib/analysis-pipeline.server";
+import { getLatestAnalysisForProduct } from "../lib/analysis-persist.server";
+import {
+  clearCachedVisual,
+  setCachedVisual,
+} from "../lib/vision-cache.server";
 import {
   applyShopifyFixes,
   fetchProductNode,
@@ -21,7 +28,6 @@ import {
   type ProductNode,
 } from "../lib/shopify-fixes.server";
 import { attachDemoWalletImage } from "../lib/attach-demo-image.server";
-import { clearCachedVisual } from "../lib/vision-cache.server";
 import { checkMutationRateLimit } from "../lib/mutation-rate-limit.server";
 import { logEvent } from "../lib/logger.server";
 import type {
@@ -58,12 +64,16 @@ const COLOR_SWATCHES: Record<string, string> = {
 function signalLabel(signal: string): string {
   if (signal === "productType") return "Product Type";
   if (signal === "material") return "Material";
+  if (signal === "pattern") return "Pattern";
+  if (signal === "finish") return "Finish";
   return "Color";
 }
 
 function fixFieldLabel(field: FixableSignal): string {
   if (field === "productType") return "Product type";
   if (field === "material") return "Material";
+  if (field === "pattern") return "Pattern";
+  if (field === "finish") return "Finish";
   return "Color";
 }
 
@@ -103,7 +113,7 @@ type FixPhase =
 type ModalKind = "confirm" | "edit" | "applyAll" | null;
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const productId = params.productId;
   if (!productId) {
     throw new Response("Missing productId", { status: 400 });
@@ -113,16 +123,78 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     ? productId
     : `gid://shopify/Product/${productId}`;
 
-  const product = await fetchProductNode(admin, gid);
-  if (!product) {
-    throw new Response("Product not found", { status: 404 });
-  }
+  try {
+    const product = await fetchProductNode(admin, gid);
+    if (!product) {
+      return {
+        product: null,
+        analysis: null as null,
+        autoAnalyze: false,
+        loadError:
+          "Product not found in Shopify. It may have been deleted — return to Catalog Health.",
+      };
+    }
 
-  return { product: normalizeProduct(product), autoAnalyze: true };
+    const normalized = normalizeProduct(product);
+    let analysis = null as ReturnType<typeof analysisFromPersistedRow>;
+    let autoAnalyze = Boolean(normalized.hasUsableImage);
+
+    // Instant paint: reuse last analysis for this image (no Groq on open)
+    if (normalized.imageUrl && session.shop) {
+      try {
+        const latest = await getLatestAnalysisForProduct(
+          session.shop,
+          product.id,
+        );
+        if (latest?.imageUrl === normalized.imageUrl) {
+          const restored = analysisFromPersistedRow(latest);
+          if (restored) {
+            analysis = restored;
+            autoAnalyze = false;
+            try {
+              const visual = JSON.parse(latest.visualJson);
+              if (visual?.visionColor) {
+                setCachedVisual(product.id, normalized.imageUrl, visual);
+              }
+            } catch {
+              await hydrateVisualCacheFromDb(
+                session.shop,
+                product.id,
+                normalized.imageUrl,
+              );
+            }
+          }
+        }
+      } catch {
+        /* DB optional for loader — fall through to autoAnalyze */
+      }
+    }
+
+    return {
+      product: normalized,
+      analysis,
+      autoAnalyze,
+      loadError: null,
+    };
+  } catch (err) {
+    const message =
+      err instanceof Error
+        ? err.message
+        : "Could not load product from Shopify.";
+    console.error("[guardian] loader failed:", message);
+    return {
+      product: null,
+      analysis: null,
+      autoAnalyze: false,
+      loadError: message,
+    };
+  }
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
+  const shop = session.shop;
+  const pipelineCtx = { shop };
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
   const requestId = String(formData.get("requestId") || "");
@@ -136,7 +208,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     : `gid://shopify/Product/${productIdParam}`;
 
   if (intent === "analyze") {
-    const result = await runFullAnalysis(admin, gid);
+    // Default: memory/DB vision cache → listing compare only.
+    // forceFull=1 (manual Re-analyze) always hits Groq.
+    const forceFull = String(formData.get("forceFull") || "") === "1";
+    const result = forceFull
+      ? await runFullAnalysis(admin, gid, pipelineCtx)
+      : await runListingRecheck(admin, gid, null, pipelineCtx);
     if (!result.ok) {
       return { error: result.error, requestId };
     }
@@ -149,7 +226,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   }
 
   if (intent === "recheck") {
-    const result = await runListingRecheck(admin, gid);
+    const result = await runListingRecheck(admin, gid, null, pipelineCtx);
     if (!result.ok) {
       return { error: result.error, requestId };
     }
@@ -159,6 +236,17 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       timings: result.timings,
       requestId,
     };
+  }
+
+  if (intent === "visionFeedback") {
+    const { recordVisionFeedback } = await import("../lib/analysis-persist.server");
+    await recordVisionFeedback({
+      shop,
+      productId: gid,
+      attribute: String(formData.get("attribute") || "") || null,
+      note: String(formData.get("note") || "Vision was wrong") || null,
+    });
+    return { feedbackSaved: true, requestId };
   }
 
   if (intent === "attachDemoImage") {
@@ -191,6 +279,18 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   if (intent === "applyFix" || intent === "applyAllFixes") {
     const started = Date.now();
     try {
+      const { getShopSettings, toFixSettings } = await import(
+        "../lib/shop-settings.server"
+      );
+      const { recordAuditEvent } = await import(
+        "../lib/analysis-persist.server"
+      );
+      const { evaluateFixPolicy, isSafeAutoFix } = await import(
+        "../lib/attributes"
+      );
+      const shopSettings = await getShopSettings(shop);
+      const fixSettings = toFixSettings(shopSettings);
+
       let fixes: Array<{
         field: FixableSignal;
         newValue: string;
@@ -200,6 +300,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       }> = [];
 
       if (intent === "applyAllFixes") {
+        const mode = String(formData.get("applyMode") || "confirm");
         const raw = String(formData.get("fixesJson") || "[]");
         let parsed: unknown;
         try {
@@ -211,25 +312,41 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         if (!validated.success) {
           return { error: "Invalid fixes payload shape", requestId };
         }
-        fixes = validated.data.map((f) => ({
-          field: f.field,
-          newValue: f.suggestedValue,
-          currentValue: f.currentValue,
-          optionId: f.optionId,
-          optionValueId: f.optionValueId,
-        }));
+        // Apply All Safe Fixes: only policy-safe when mode=safe; otherwise confirmed batch
+        fixes = validated.data
+          .filter((f) => {
+            if (mode === "safe") {
+              return isSafeAutoFix(f.field, fixSettings);
+            }
+            const decision = evaluateFixPolicy(f.field, fixSettings);
+            return decision.allowed;
+          })
+          .map((f) => ({
+            field: f.field,
+            newValue: f.suggestedValue,
+            currentValue: f.currentValue,
+            optionId: f.optionId,
+            optionValueId: f.optionValueId,
+          }));
       } else {
         const field = String(formData.get("field") || "color") as FixableSignal;
         const newValue = String(formData.get("newValue") || "").trim();
         if (!newValue) {
           return { error: "Missing fix parameters", requestId };
         }
-        if (
-          field !== "color" &&
-          field !== "productType" &&
-          field !== "material"
-        ) {
+        const allowedFields: FixableSignal[] = [
+          "color",
+          "productType",
+          "material",
+          "pattern",
+          "finish",
+        ];
+        if (!allowedFields.includes(field)) {
           return { error: `Unsupported fix field: ${field}`, requestId };
+        }
+        const decision = evaluateFixPolicy(field, fixSettings);
+        if (!decision.allowed) {
+          return { error: decision.reason, requestId };
         }
         fixes = [
           {
@@ -244,7 +361,13 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       }
 
       if (fixes.length === 0) {
-        return { error: "No fixes to apply", requestId };
+        return {
+          error:
+            intent === "applyAllFixes"
+              ? "No safe fixes available to apply"
+              : "No fixes to apply",
+          requestId,
+        };
       }
 
       const rateLimitError = checkMutationRateLimit(gid);
@@ -259,8 +382,31 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       }
 
       const mutateStarted = Date.now();
-      const { outcomes, product } = await applyShopifyFixes(admin, gid, fixes);
+      const { outcomes, product, metafields, timings: mutTimings } =
+        await applyShopifyFixes(admin, gid, fixes, {
+          settings: fixSettings,
+          merchantConfirmed: true,
+        });
       const mutateMs = Date.now() - mutateStarted;
+
+      // Parallel audit writes — independent rows
+      await Promise.all(
+        outcomes.map((outcome) => {
+          const requested = fixes.find((f) => f.field === outcome.field);
+          return recordAuditEvent({
+            shop,
+            productId: gid,
+            userId: null,
+            attribute: outcome.field,
+            oldValue: requested?.currentValue ?? null,
+            newValue: requested?.newValue ?? null,
+            reason: intent,
+            success: outcome.success,
+            error: outcome.error ?? null,
+            meta: { verifiedValue: outcome.verifiedValue },
+          });
+        }),
+      );
 
       logEvent({
         level: "info",
@@ -269,6 +415,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         durationMs: mutateMs,
         details: {
           intent,
+          shopifyMutateMs: mutTimings.mutateMs,
+          shopifyVerifyMs: mutTimings.verifyMs,
           outcomes: outcomes.map((o) => ({
             field: o.field,
             success: o.success,
@@ -285,21 +433,68 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
       const anySuccess = outcomes.some((o) => o.success);
       let analysis: AnalysisResult | null = null;
-      let timings = null;
-      let recheckMode: "cached-recheck" | "full" | null = null;
+      let timings: {
+        productFetchMs: number;
+        visionMs: number;
+        pixelMs: number;
+        consistencyMs: number;
+        totalMs: number;
+        cacheHit: boolean;
+      } | null = null;
+      let recheckMode:
+        | "targeted-recheck"
+        | "cached-recheck"
+        | "full"
+        | null = null;
 
       if (anySuccess && product) {
-        const recheck = await runListingRecheck(admin, gid, product);
-        if (recheck.ok) {
-          analysis = recheck.analysis;
-          timings = recheck.timings;
-          recheckMode = recheck.mode;
+        // Fast path: targeted recheck — NO vision, NO image download
+        const { recomputeAnalysisAfterFix } = await import(
+          "../lib/post-fix-analysis.server"
+        );
+        const targeted = await recomputeAnalysisAfterFix({
+          shop,
+          product,
+          admin,
+          metafields,
+        });
+        if (targeted.ok) {
+          analysis = targeted.analysis;
+          recheckMode = "targeted-recheck";
+          timings = {
+            productFetchMs: 0,
+            visionMs: 0,
+            pixelMs: 0,
+            consistencyMs: targeted.timings.consistencyMs,
+            totalMs: targeted.timings.totalMs,
+            cacheHit: true,
+          };
         } else {
-          const full = await runFullAnalysis(admin, gid);
-          if (full.ok) {
-            analysis = full.analysis;
-            timings = full.timings;
-            recheckMode = full.mode;
+          // Cache miss only: listing-only recheck (still no vision if cache warms)
+          // Never fall back to full vision on the Apply Fix request path.
+          const recheck = await runListingRecheck(
+            admin,
+            gid,
+            product,
+            pipelineCtx,
+          );
+          if (recheck.ok && recheck.mode === "cached-recheck") {
+            analysis = recheck.analysis;
+            timings = recheck.timings;
+            recheckMode = recheck.mode;
+          } else {
+            // Return mutation success without blocking on vision;
+            // merchant can re-analyze if needed.
+            logEvent({
+              level: "warn",
+              event: "mutation.recheck_deferred",
+              productId: gid,
+              details: {
+                reason: targeted.reason,
+                message:
+                  "Apply Fix verified in Shopify; analysis refresh deferred (no vision on mutation path)",
+              },
+            });
           }
         }
       }
@@ -315,6 +510,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           cacheHit: timings?.cacheHit ?? false,
           successCount: outcomes.filter((o) => o.success).length,
           total: outcomes.length,
+          totalMs: Date.now() - started,
+          mutateMs,
         },
       });
 
@@ -376,14 +573,65 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 };
 
 export default function GuardianPage() {
-  const { product: initialProduct } = useLoaderData<typeof loader>();
+  const {
+    product: initialProduct,
+    loadError,
+    analysis: loaderAnalysis,
+    autoAnalyze: shouldAutoAnalyze,
+  } =
+    useLoaderData<typeof loader>();
+
+  if (!initialProduct) {
+    return (
+      <s-page heading="Visual Listing Guardian">
+        <s-link slot="breadcrumb-actions" href="/app">
+          Catalog Health
+        </s-link>
+        <s-section heading="Couldn't load product">
+          <s-banner tone="critical" heading="Shopify connection problem">
+            <s-paragraph>
+              {loadError ||
+                "Could not reach Shopify Admin API. This is usually a temporary network or tunnel issue — not a product bug."}
+            </s-paragraph>
+            <s-paragraph>
+              Try: refresh this page, re-open the app from Shopify Admin Preview,
+              or restart `shopify app dev` (Cloudflare tunnels expire).
+            </s-paragraph>
+          </s-banner>
+          <s-stack direction="inline" gap="base">
+            <s-button variant="primary" onClick={() => window.location.reload()}>
+              Retry
+            </s-button>
+            <s-button href="/app">Back to Catalog Health</s-button>
+          </s-stack>
+        </s-section>
+      </s-page>
+    );
+  }
+
+  return <GuardianContent initialProduct={initialProduct} initialAnalysis={loaderAnalysis} autoAnalyze={shouldAutoAnalyze} />;
+}
+
+function GuardianContent({
+  initialProduct,
+  initialAnalysis,
+  autoAnalyze: shouldAutoAnalyze,
+}: {
+  initialProduct: ReturnType<typeof normalizeProduct>;
+  initialAnalysis: import("../lib/types").AnalysisResult | null;
+  autoAnalyze: boolean;
+}) {
   const fetcher = useFetcher<typeof action>();
   const shopify = useAppBridge();
   const fixModal = useFixModal();
 
   const [product, setProduct] = useState(initialProduct);
-  const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
-  const [analyzedAt, setAnalyzedAt] = useState<string | null>(null);
+  const [analysis, setAnalysis] = useState<AnalysisResult | null>(
+    initialAnalysis,
+  );
+  const [analyzedAt, setAnalyzedAt] = useState<string | null>(
+    initialAnalysis ? new Date().toISOString() : null,
+  );
   const [showEvidence, setShowEvidence] = useState(false);
   const [pendingFix, setPendingFix] = useState<SuggestedFix | null>(null);
   const [modalKind, setModalKind] = useState<ModalKind>(null);
@@ -481,6 +729,9 @@ export default function GuardianPage() {
 
   // Auto-analyze once per token when Guardian has a usable image and no analysis.
   useEffect(() => {
+    // Loader may restore a prior analysis (skip). Token bumps (e.g. demo image) force a run.
+    const allowAuto = shouldAutoAnalyze || autoAnalyzeToken > 0;
+    if (!allowAuto) return;
     if (autoAnalyzeStartedForTokenRef.current === autoAnalyzeToken) return;
     if (!product.hasUsableImage) return;
     if (analysis) return;
@@ -491,6 +742,7 @@ export default function GuardianPage() {
       { method: "POST" },
     );
   }, [
+    shouldAutoAnalyze,
     autoAnalyzeToken,
     product.hasUsableImage,
     analysis,
@@ -696,9 +948,14 @@ export default function GuardianPage() {
     [analysis, bulkProgress, openConfirm],
   );
 
-  const confidencePct = analysis
-    ? Math.round(analysis.overallConfidence * 100)
-    : null;
+  const overallBand =
+    analysis == null
+      ? null
+      : analysis.overallConfidence >= 0.85
+        ? "High"
+        : analysis.overallConfidence >= 0.55
+          ? "Medium"
+          : "Low";
 
   const bannerTone =
     analysis?.overallVerdict === "MATCH"
@@ -717,7 +974,7 @@ export default function GuardianPage() {
   return (
     <s-page heading="Visual Listing Guardian">
       <s-link slot="breadcrumb-actions" href="/app">
-        Products
+        Catalog Health
       </s-link>
 
       <s-section heading={product.title}>
@@ -847,11 +1104,30 @@ export default function GuardianPage() {
 
       {analysisError && !isAnalyzing && (
         <s-section heading="Analysis Error">
-          <s-banner tone="critical" heading="Analysis couldn't be completed">
-            {analysisError}
-            <s-button variant="primary" onClick={runAnalyze}>
-              Retry Analysis
-            </s-button>
+          <s-banner
+            tone={
+              /rate limit|token limit|Groq daily/i.test(analysisError)
+                ? "warning"
+                : "critical"
+            }
+            heading={
+              /rate limit|token limit|Groq daily/i.test(analysisError)
+                ? "Vision quota reached"
+                : "Analysis couldn't be completed"
+            }
+          >
+            <s-paragraph>{analysisError}</s-paragraph>
+            {/rate limit|token limit|Groq daily/i.test(analysisError) ? (
+              <s-paragraph>
+                Open this product again to use the last cached analysis, or wait
+                for the daily Groq reset (~17 min from the API message). Do not
+                spam Re-analyze — each attempt uses more quota.
+              </s-paragraph>
+            ) : (
+              <s-button variant="primary" onClick={runAnalyze}>
+                Retry Analysis
+              </s-button>
+            )}
           </s-banner>
         </s-section>
       )}
@@ -862,10 +1138,15 @@ export default function GuardianPage() {
             <s-stack direction="inline" gap="base">
               <s-spinner accessibilityLabel="Analyzing product image" />
               <s-stack direction="block" gap="small">
-                <s-text type="strong">Analysis in progress</s-text>
-                <s-text>1. Fetching product image</s-text>
-                <s-text>2. Analyzing visual attributes (color, type, material)</s-text>
-                <s-text>3. Comparing against listing data</s-text>
+                <s-text type="strong">Vision model running</s-text>
+                <s-text>
+                  Sending the product image URL to Groq (usually 5–25s). Image
+                  download and listing compare run in parallel.
+                </s-text>
+                <s-text tone="neutral">
+                  Re-opening this product later is instant — we reuse the last
+                  vision result until you click Re-analyze.
+                </s-text>
               </s-stack>
             </s-stack>
           </s-stack>
@@ -879,9 +1160,9 @@ export default function GuardianPage() {
               <s-text type="strong">
                 Listing Health: {analysis.healthScore} / 100
               </s-text>
-              {confidencePct !== null && (
+              {overallBand !== null && (
                 <s-badge tone={verdictTone(analysis.overallVerdict)}>
-                  Overall confidence: {confidencePct}%
+                  {overallBand} confidence
                 </s-badge>
               )}
               {analysis.analysisSource === "cached-recheck" && (
@@ -897,6 +1178,15 @@ export default function GuardianPage() {
                   })}
                 </s-badge>
               )}
+              {fetcher.data &&
+                "timings" in fetcher.data &&
+                fetcher.data.timings && (
+                  <s-badge tone="info">
+                    {fetcher.data.timings.cacheHit
+                      ? `Recheck ${fetcher.data.timings.totalMs}ms`
+                      : `Vision ${fetcher.data.timings.visionMs}ms · total ${fetcher.data.timings.totalMs}ms`}
+                  </s-badge>
+                )}
             </s-stack>
 
             {bannerTone && (
@@ -954,6 +1244,33 @@ export default function GuardianPage() {
                             <s-text type="strong">
                               {signalLabel(sr.signal)}
                             </s-text>
+                            <s-badge tone={verdictTone(sr.verdict)}>
+                              {sr.verdict === "MISMATCH"
+                                ? "Mismatch"
+                                : sr.verdict === "MATCH"
+                                  ? "Match"
+                                  : sr.verdict === "UNCERTAIN"
+                                    ? "Uncertain"
+                                    : sr.verdict === "NOT_DETECTABLE"
+                                      ? "Not detectable"
+                                      : sr.verdict}
+                            </s-badge>
+                            <s-badge>
+                              {sr.confidence !== null
+                                ? sr.confidence >= 0.85
+                                  ? "High confidence"
+                                  : sr.confidence >= 0.55
+                                    ? "Medium confidence"
+                                    : "Low confidence"
+                                : "—"}
+                            </s-badge>
+                          </div>
+                          <s-paragraph>
+                            <s-text type="strong">Shopify says: </s-text>
+                            {sr.claimed ?? "—"}
+                          </s-paragraph>
+                          <s-paragraph>
+                            <s-text type="strong">Vision detected: </s-text>
                             <s-stack direction="inline" gap="small">
                               {sr.signal === "color" &&
                                 claimedSwatch &&
@@ -973,8 +1290,6 @@ export default function GuardianPage() {
                                     }}
                                   />
                                 )}
-                              <s-text>{sr.claimed ?? "N/A"}</s-text>
-                              <s-text>→</s-text>
                               {sr.signal === "color" &&
                                 swatchKey &&
                                 COLOR_SWATCHES[swatchKey] && (
@@ -993,17 +1308,13 @@ export default function GuardianPage() {
                                     }}
                                   />
                                 )}
-                              <s-text>{sr.detected ?? "N/A"}</s-text>
+                              <s-text>{sr.detected ?? "—"}</s-text>
                             </s-stack>
-                            <s-badge>
-                              {sr.confidence !== null
-                                ? `${Math.round(sr.confidence * 100)}%`
-                                : "—"}
-                            </s-badge>
-                            <s-badge tone={verdictTone(sr.verdict)}>
-                              {sr.verdict}
-                            </s-badge>
-                          </div>
+                          </s-paragraph>
+                          <s-paragraph>
+                            <s-text type="strong">Evidence: </s-text>
+                            {sr.evidence}
+                          </s-paragraph>
 
                           {fix && (
                             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 } satisfies CSSProperties}>
@@ -1013,7 +1324,11 @@ export default function GuardianPage() {
                                 disabled={busy && !applyingThis}
                                 {...(applyingThis ? { loading: true } : {})}
                               >
-                                {applyingThis ? "Applying…" : "Apply Fix"}
+                                {applyingThis
+                                  ? livePhase === "rechecking"
+                                    ? "Verifying…"
+                                    : "Updating…"
+                                  : "Apply Fix"}
                               </s-button>
                               <s-button
                                 onClick={() => openEdit(fix)}
@@ -1073,20 +1388,39 @@ export default function GuardianPage() {
                     </s-paragraph>
                   ))}
                   <s-paragraph>
-                    <s-text type="strong">Overall confidence: </s-text>
-                    {confidencePct}%
+                    <s-text type="strong">Confidence: </s-text>
+                    {overallBand} (model signal, not measured accuracy)
                   </s-paragraph>
                 </s-stack>
               </s-box>
             )}
+
+            <s-stack direction="inline" gap="base">
+              <s-button
+                onClick={() =>
+                  fetcher.submit(
+                    {
+                      intent: "visionFeedback",
+                      note: "Vision was wrong",
+                      requestId: nextRequestId(),
+                    },
+                    { method: "POST" },
+                  )
+                }
+                disabled={busy}
+              >
+                Vision was wrong
+              </s-button>
+            </s-stack>
 
             {analysis.suggestedFixes.length > 0 && (
               <s-box padding="base" borderWidth="base" borderRadius="base">
                 <s-stack direction="block" gap="base">
                   <s-heading>Suggested actions</s-heading>
                   <s-paragraph>
-                    Apply one fix at a time, edit a value manually, or apply all
-                    eligible fixes in one batch.
+                    Confirm each change, edit a value manually, or apply all
+                    confirmed fixes in one batch. Safe auto-fix stays off unless
+                    enabled in Settings.
                   </s-paragraph>
                   {analysis.suggestedFixes.map((fix) => {
                     const applyingThis =
@@ -1104,7 +1438,8 @@ export default function GuardianPage() {
                             {fixFieldLabel(fix.field)}
                           </s-text>
                           <s-text>
-                            {fix.currentValue} → {fix.suggestedValue}
+                            Listing says: {fix.currentValue} → Image shows:{" "}
+                            {fix.suggestedValue}
                           </s-text>
                           <s-button
                             variant="primary"
@@ -1112,7 +1447,11 @@ export default function GuardianPage() {
                             disabled={busy && !applyingThis}
                             {...(applyingThis ? { loading: true } : {})}
                           >
-                            {applyingThis ? "Applying…" : "Apply Fix"}
+                            {applyingThis
+                              ? livePhase === "rechecking"
+                                ? "Verifying…"
+                                : "Updating…"
+                              : "Apply Fix"}
                           </s-button>
                           <s-button
                             onClick={() => openEdit(fix)}
@@ -1133,7 +1472,7 @@ export default function GuardianPage() {
                     >
                       {intent === "applyAllFixes"
                         ? `Applying ${analysis.suggestedFixes.length} fixes…`
-                        : `Apply All Fixes (${analysis.suggestedFixes.length})`}
+                        : `Apply All Safe Fixes (${analysis.suggestedFixes.length})`}
                     </s-button>
                   )}
                 </s-stack>

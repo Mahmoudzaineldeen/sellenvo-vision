@@ -3,7 +3,17 @@ import type { FixableSignal, SuggestedFix } from "./types";
 import {
   extractMaterialFromTitle,
   replaceMaterialInTitle,
+  resolveClaimedMaterial,
 } from "./consistency.server";
+import {
+  ensureSellenvoMetafieldDefinitions,
+  fetchProductSellenvoMetafields,
+  setProductSellenvoMetafield,
+  type SellenvoMetafieldKey,
+  type ProductMetafields,
+} from "./metafields.server";
+import { evaluateFixPolicy, type ShopFixSettings } from "./attributes";
+import type { MaterialWriteMode } from "./shop-settings.server";
 
 export type AdminClient = {
   graphql: (
@@ -125,28 +135,53 @@ export async function fetchProductNode(
   admin: AdminClient,
   productId: string,
 ): Promise<ProductNode | null> {
-  const response = await admin.graphql(GET_PRODUCT_QUERY, {
-    variables: { id: productId },
-  });
-  const json = await response.json();
-  const top = graphqlErrorMessage(json);
-  if (top) throw new Error(top);
+  let lastError: unknown;
+  // One retry for transient tunnel/DNS blips ("fetch failed", no response)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await admin.graphql(GET_PRODUCT_QUERY, {
+        variables: { id: productId },
+      });
+      const json = await response.json();
+      const top = graphqlErrorMessage(json);
+      if (top) throw new Error(top);
 
-  const raw =
-    json && typeof json === "object" && "data" in json
-      ? (json as { data?: { product?: unknown } }).data?.product
-      : undefined;
-  if (raw == null) return null;
+      const raw =
+        json && typeof json === "object" && "data" in json
+          ? (json as { data?: { product?: unknown } }).data?.product
+          : undefined;
+      if (raw == null) return null;
 
-  const parsed = ProductNodeSchema.safeParse(raw);
-  if (!parsed.success) {
-    console.error(
-      "[shopify-fixes] ProductNode schema validation failed:",
-      parsed.error.flatten(),
-    );
-    throw new Error("Shopify product response failed schema validation");
+      const parsed = ProductNodeSchema.safeParse(raw);
+      if (!parsed.success) {
+        console.error(
+          "[shopify-fixes] ProductNode schema validation failed:",
+          parsed.error.flatten(),
+        );
+        throw new Error("Shopify product response failed schema validation");
+      }
+      return parsed.data;
+    } catch (err) {
+      lastError = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      const transient =
+        msg.includes("fetch failed") ||
+        msg.includes("no response available") ||
+        msg.includes("ECONNRESET") ||
+        msg.includes("ETIMEDOUT") ||
+        msg.includes("ENOTFOUND");
+      if (!transient || attempt === 1) break;
+      await new Promise((r) => setTimeout(r, 400));
+    }
   }
-  return parsed.data;
+
+  const msg =
+    lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(
+    msg.includes("fetch failed") || msg.includes("no response available")
+      ? "Could not reach Shopify Admin API (network). Retry, or restart `shopify app dev` and open the Preview URL from Admin."
+      : msg,
+  );
 }
 
 export async function applyColorFix(
@@ -219,6 +254,13 @@ export type FixRequest = {
   optionValueId?: string;
 };
 
+export type ApplyFixesOptions = {
+  /** Server-side policy settings — client safeToApply is ignored */
+  settings?: ShopFixSettings;
+  /** Confirmed by merchant (or safe auto-fix path) */
+  merchantConfirmed?: boolean;
+};
+
 function verifiedColor(product: ProductNode): string | null {
   return (
     product.options.find(
@@ -228,71 +270,160 @@ function verifiedColor(product: ProductNode): string | null {
   );
 }
 
+function defaultFixSettings(): ShopFixSettings {
+  return {
+    safeAutoFixEnabled: false,
+    materialWriteMode: "metafield",
+    showExperimentalAttributes: false,
+  };
+}
+
 /**
  * Apply one or many listing fixes.
  *
  * Parallelism rule:
- * - Color (productOptionUpdate) can run alongside productUpdate.
- * - Product type + material both use productUpdate → combined into ONE mutation
+ * - Color (productOptionUpdate) can run alongside productUpdate / metafields.
+ * - Product type + material title both use productUpdate → combined into ONE mutation
  *   to avoid lost-update races on title/productType.
+ * - Material metafield writes use metafieldsSet (independent).
+ *
+ * SECURITY: server re-evaluates FixPolicy; never trusts client safeToApply.
  */
 export async function applyShopifyFixes(
   admin: AdminClient,
   productId: string,
   fixes: FixRequest[],
-): Promise<{ outcomes: FixOutcome[]; product: ProductNode | null }> {
+  options?: ApplyFixesOptions,
+): Promise<{
+  outcomes: FixOutcome[];
+  product: ProductNode | null;
+  metafields: ProductMetafields | null;
+  timings: { mutateMs: number; verifyMs: number };
+}> {
+  const mutateStarted = Date.now();
   if (fixes.length === 0) {
-    return { outcomes: [], product: await fetchProductNode(admin, productId) };
+    return {
+      outcomes: [],
+      product: await fetchProductNode(admin, productId),
+      metafields: null,
+      timings: { mutateMs: 0, verifyMs: 0 },
+    };
   }
 
-  const colorFix = fixes.find((f) => f.field === "color");
-  const typeFix = fixes.find((f) => f.field === "productType");
-  const materialFix = fixes.find((f) => f.field === "material");
+  const settings = options?.settings ?? defaultFixSettings();
+  const merchantConfirmed = options?.merchantConfirmed !== false;
+
+  const policyBlocked: FixOutcome[] = [];
+  const allowedFixes: FixRequest[] = [];
+  for (const fix of fixes) {
+    const decision = evaluateFixPolicy(fix.field, settings);
+    if (!decision.allowed) {
+      policyBlocked.push({
+        field: fix.field,
+        success: false,
+        verifiedValue: null,
+        error: decision.reason,
+      });
+      continue;
+    }
+    if (decision.requiresConfirmation && !merchantConfirmed) {
+      policyBlocked.push({
+        field: fix.field,
+        success: false,
+        verifiedValue: null,
+        error: "Merchant confirmation required",
+      });
+      continue;
+    }
+    allowedFixes.push(fix);
+  }
+
+  if (allowedFixes.length === 0) {
+    return {
+      outcomes: policyBlocked,
+      product: await fetchProductNode(admin, productId),
+      metafields: null,
+      timings: { mutateMs: Date.now() - mutateStarted, verifyMs: 0 },
+    };
+  }
+
+  const colorFix = allowedFixes.find((f) => f.field === "color");
+  const typeFix = allowedFixes.find((f) => f.field === "productType");
+  const materialFix = allowedFixes.find((f) => f.field === "material");
+  const patternFix = allowedFixes.find((f) => f.field === "pattern");
+  const finishFix = allowedFixes.find((f) => f.field === "finish");
 
   let current: ProductNode | null = null;
   if (materialFix || typeFix) {
     current = await fetchProductNode(admin, productId);
     if (!current) {
       return {
-        outcomes: fixes.map((f) => ({
-          field: f.field,
-          success: false,
-          verifiedValue: null,
-          error: "Product not found",
-        })),
+        outcomes: [
+          ...policyBlocked,
+          ...allowedFixes.map((f) => ({
+            field: f.field,
+            success: false,
+            verifiedValue: null,
+            error: "Product not found",
+          })),
+        ],
         product: null,
+        metafields: null,
+        timings: { mutateMs: Date.now() - mutateStarted, verifyMs: 0 },
       };
     }
   }
 
+  const writeMode: MaterialWriteMode = settings.materialWriteMode;
   const productUpdate: { productType?: string; title?: string } = {};
   let materialPrepError: string | undefined;
+  let materialNeedsMetafield = false;
 
   if (typeFix) {
     productUpdate.productType = typeFix.newValue;
   }
 
   if (materialFix && current) {
-    const claimed =
-      extractMaterialFromTitle(current.title) ??
-      (materialFix.currentValue || "").trim().toLowerCase();
-    if (!claimed) {
-      materialPrepError =
-        "No material claim found in the product title to update safely";
-    } else {
-      const nextTitle = replaceMaterialInTitle(
-        current.title,
-        claimed,
-        materialFix.newValue,
-      );
-      if (!nextTitle) {
-        materialPrepError = `Could not safely replace material "${claimed}" in title "${current.title}"`;
-      } else if (nextTitle === current.title) {
-        materialPrepError = "Material title rewrite produced no change";
+    materialNeedsMetafield =
+      writeMode === "metafield" || writeMode === "both";
+    const needsTitle = writeMode === "title" || writeMode === "both";
+
+    if (needsTitle) {
+      const claimed =
+        extractMaterialFromTitle(current.title) ??
+        (materialFix.currentValue || "").trim().toLowerCase();
+      if (!claimed) {
+        if (!materialNeedsMetafield) {
+          materialPrepError =
+            "No material claim found in the product title to update safely";
+        }
       } else {
-        productUpdate.title = nextTitle;
+        const nextTitle = replaceMaterialInTitle(
+          current.title,
+          claimed,
+          materialFix.newValue,
+        );
+        if (!nextTitle) {
+          if (!materialNeedsMetafield) {
+            materialPrepError = `Could not safely replace material "${claimed}" in title "${current.title}"`;
+          }
+        } else if (nextTitle === current.title) {
+          if (!materialNeedsMetafield) {
+            materialPrepError = "Material title rewrite produced no change";
+          }
+        } else {
+          productUpdate.title = nextTitle;
+        }
       }
     }
+
+    if (materialNeedsMetafield) {
+      await ensureSellenvoMetafieldDefinitions(admin);
+    }
+  }
+
+  if (patternFix || finishFix) {
+    await ensureSellenvoMetafieldDefinitions(admin);
   }
 
   const colorOutcomePromise = (async (): Promise<FixOutcome | null> => {
@@ -327,7 +458,7 @@ export async function applyShopifyFixes(
 
   const productOutcomePromise = (async (): Promise<FixOutcome[]> => {
     const outcomes: FixOutcome[] = [];
-    if (materialFix && materialPrepError) {
+    if (materialFix && materialPrepError && !materialNeedsMetafield) {
       outcomes.push({
         field: "material",
         success: false,
@@ -347,44 +478,114 @@ export async function applyShopifyFixes(
           error: "Product type update skipped",
         });
       }
-      return outcomes;
+    } else {
+      const result = await applyProductFieldsFix(admin, productId, productUpdate);
+      if (result.error) {
+        if (typeFix && productUpdate.productType !== undefined) {
+          outcomes.push({
+            field: "productType",
+            success: false,
+            verifiedValue: null,
+            error: result.error,
+          });
+        }
+        if (materialFix && productUpdate.title !== undefined) {
+          outcomes.push({
+            field: "material",
+            success: false,
+            verifiedValue: null,
+            error: result.error,
+          });
+        }
+      } else {
+        if (typeFix && productUpdate.productType !== undefined) {
+          outcomes.push({
+            field: "productType",
+            success: true,
+            verifiedValue: typeFix.newValue,
+          });
+        }
+        if (materialFix && productUpdate.title !== undefined && !materialNeedsMetafield) {
+          outcomes.push({
+            field: "material",
+            success: true,
+            verifiedValue: materialFix.newValue,
+          });
+        }
+      }
     }
 
-    const result = await applyProductFieldsFix(admin, productId, productUpdate);
-    if (result.error) {
-      if (typeFix && productUpdate.productType !== undefined) {
-        outcomes.push({
-          field: "productType",
-          success: false,
-          verifiedValue: null,
-          error: result.error,
-        });
-      }
-      if (materialFix && productUpdate.title !== undefined) {
-        outcomes.push({
-          field: "material",
-          success: false,
-          verifiedValue: null,
-          error: result.error,
-        });
-      }
-      return outcomes;
-    }
-
-    if (typeFix && productUpdate.productType !== undefined) {
-      outcomes.push({
-        field: "productType",
-        success: true,
-        verifiedValue: typeFix.newValue,
-      });
-    }
-    if (materialFix && productUpdate.title !== undefined) {
-      outcomes.push({
+    // Metafield writes (material / pattern / finish)
+    const metafieldWrites: Array<{
+      field: FixableSignal;
+      key: SellenvoMetafieldKey;
+      value: string;
+    }> = [];
+    if (materialFix && materialNeedsMetafield && !materialPrepError) {
+      metafieldWrites.push({
         field: "material",
-        success: true,
-        verifiedValue: materialFix.newValue,
+        key: "material",
+        value: materialFix.newValue,
+      });
+    } else if (
+      materialFix &&
+      materialNeedsMetafield &&
+      materialPrepError &&
+      writeMode === "metafield"
+    ) {
+      // title prep failed but metafield-only still OK
+      metafieldWrites.push({
+        field: "material",
+        key: "material",
+        value: materialFix.newValue,
+      });
+    } else if (materialFix && materialNeedsMetafield) {
+      metafieldWrites.push({
+        field: "material",
+        key: "material",
+        value: materialFix.newValue,
       });
     }
+    if (patternFix) {
+      metafieldWrites.push({
+        field: "pattern",
+        key: "pattern",
+        value: patternFix.newValue,
+      });
+    }
+    if (finishFix) {
+      metafieldWrites.push({
+        field: "finish",
+        key: "finish",
+        value: finishFix.newValue,
+      });
+    }
+
+    const metafieldOutcomes = await Promise.all(
+      metafieldWrites.map(async (write) => {
+        const result = await setProductSellenvoMetafield(
+          admin,
+          productId,
+          write.key,
+          write.value,
+        );
+        if (result.error) {
+          return {
+            field: write.field,
+            success: false,
+            verifiedValue: null,
+            error: result.error,
+          } as FixOutcome;
+        }
+        return {
+          field: write.field,
+          success: true,
+          verifiedValue: write.value,
+        } as FixOutcome;
+      }),
+    );
+    outcomes.push(...metafieldOutcomes);
+
     return outcomes;
   })();
 
@@ -393,9 +594,19 @@ export async function applyShopifyFixes(
     colorOutcomePromise,
     productOutcomePromise,
   ]);
+  const mutateMs = Date.now() - mutateStarted;
 
-  const verified = await fetchProductNode(admin, productId);
-  const outcomes: FixOutcome[] = [];
+  const verifyStarted = Date.now();
+  // Parallelize product refetch + metafield verify when needed
+  const needsMeta = Boolean(materialFix || patternFix || finishFix);
+  const [verified, metaVerified] = await Promise.all([
+    fetchProductNode(admin, productId),
+    needsMeta
+      ? fetchProductSellenvoMetafields(admin, productId)
+      : Promise.resolve(null),
+  ]);
+  const verifyMs = Date.now() - verifyStarted;
+  const outcomes: FixOutcome[] = [...policyBlocked];
 
   if (colorOutcome) {
     if (!colorOutcome.success || !verified) {
@@ -434,12 +645,43 @@ export async function applyShopifyFixes(
           : `Verification failed. Shopify shows: ${value ?? "unknown"}`,
       });
     } else if (outcome.field === "material") {
-      const value = extractMaterialFromTitle(verified.title);
-      const success =
-        value?.toLowerCase() ===
-        (materialFix?.newValue ?? "").toLowerCase();
+      const expected = (materialFix?.newValue ?? "").toLowerCase();
+      let value: string | null = null;
+      if (metaVerified?.material) {
+        value = metaVerified.material;
+      } else if (verified) {
+        value = resolveClaimedMaterial({
+          title: verified.title,
+          metafieldValue: metaVerified?.material,
+        }).claimedMaterial;
+      }
+      const success = value?.toLowerCase() === expected;
       outcomes.push({
         field: "material",
+        success,
+        verifiedValue: value,
+        error: success
+          ? undefined
+          : `Verification failed. Shopify shows: ${value ?? "unknown"}`,
+      });
+    } else if (outcome.field === "pattern") {
+      const value = metaVerified?.pattern ?? null;
+      const success =
+        value?.toLowerCase() === (patternFix?.newValue ?? "").toLowerCase();
+      outcomes.push({
+        field: "pattern",
+        success,
+        verifiedValue: value,
+        error: success
+          ? undefined
+          : `Verification failed. Shopify shows: ${value ?? "unknown"}`,
+      });
+    } else if (outcome.field === "finish") {
+      const value = metaVerified?.finish ?? null;
+      const success =
+        value?.toLowerCase() === (finishFix?.newValue ?? "").toLowerCase();
+      outcomes.push({
+        field: "finish",
         success,
         verifiedValue: value,
         error: success
@@ -449,7 +691,12 @@ export async function applyShopifyFixes(
     }
   }
 
-  return { outcomes, product: verified };
+  return {
+    outcomes,
+    product: verified,
+    metafields: metaVerified,
+    timings: { mutateMs, verifyMs },
+  };
 }
 
 export function fixRequestFromSuggested(

@@ -5,6 +5,7 @@
 | Symptom | Likely cause | Recovery |
 |---------|--------------|----------|
 | “GROQ_API_KEY is not set” | Missing env | Add key to `.env`, restart `shopify app dev` |
+| Vision timeout / all strategies fail | Slow multimodal or deprecated model | App uses `qwen/qwen3.6-27b` only (Scout deprecated). Prefers HTTPS image URL + 60s timeout. Retry; check Groq status/rate limits |
 | Analysis timed out | Groq slow / network | Retry; check Groq status |
 | Blank / placeholder image | No real media | Attach demo image or upload in Admin |
 | Too many updates… | Rate limit (5/min/product) | Wait ~60s |

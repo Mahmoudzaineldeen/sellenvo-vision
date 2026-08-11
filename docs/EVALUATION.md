@@ -13,6 +13,17 @@ Deterministic unit tests **do not** measure vision accuracy. Use this dataset to
 | False mismatch rate | Listing correct, engine says MISMATCH |
 | False match rate | Listing wrong, engine says MATCH |
 | Uncertain rate | Share of `UNCERTAIN` overall verdicts |
+| **False Auto-Fix Rate (FAFR)** | Among merchant-confirmed or auto-applied fixes, share that a human later judges incorrect. **Critical safety metric** — required before promoting attributes to PRODUCTION or enabling `safe` fix policy. |
+
+## False Auto-Fix Rate procedure
+
+1. Collect ≥50 labeled mismatch cases per attribute under review
+2. Run suggested-fix generation (do not auto-apply in production)
+3. Human judges whether suggested value is correct
+4. FAFR = incorrect suggestions / total suggestions with conf ≥ threshold
+5. Gate: FAFR must be documented in `app/lib/attributes/evaluation.ts` before PRODUCTION promotion
+
+Deterministic consistency tests prove the rules engine — they do **not** prove vision accuracy or FAFR.
 
 ## Suggested set (15–20 images)
 

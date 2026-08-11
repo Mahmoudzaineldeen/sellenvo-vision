@@ -79,9 +79,41 @@ function toDescriptionHtml(description: string): string {
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
-  const response = await admin.graphql(LIST_PRODUCTS_QUERY);
-  const json = await response.json();
+  const { admin, session } = await authenticate.admin(request);
+  const url = new URL(request.url);
+  const filter = url.searchParams.get("filter") || "attention";
+  const page = Math.max(1, Number(url.searchParams.get("page") || "1"));
+  const pageSize = 25;
+
+  const verdictFilter =
+    filter === "attention"
+      ? ("MISMATCH" as const)
+      : filter === "uncertain"
+        ? ("UNCERTAIN" as const)
+        : filter === "healthy"
+          ? ("MATCH" as const)
+          : ("all" as const);
+
+  const { summarizeCatalogHealth, listCatalogHealth } = await import(
+    "../lib/analysis-persist.server"
+  );
+  const { listScanJobs } = await import("../lib/jobs.server");
+
+  // Persist-first Inbox: never analyze on render. Parallelize independent reads.
+  const inboxStarted = Date.now();
+  const [health, analyses, jobs, productsResponse] = await Promise.all([
+    summarizeCatalogHealth(session.shop),
+    listCatalogHealth(session.shop, {
+      take: pageSize,
+      skip: (page - 1) * pageSize,
+      verdict: verdictFilter,
+    }),
+    listScanJobs(session.shop, { take: 20 }),
+    admin.graphql(LIST_PRODUCTS_QUERY),
+  ]);
+  const inboxLoadMs = Date.now() - inboxStarted;
+
+  const json = await productsResponse.json();
   const edges = json.data?.products?.edges ?? [];
 
   const products = edges.map(
@@ -117,7 +149,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   );
 
-  return { products };
+  return {
+    products,
+    health,
+    analyses,
+    jobs,
+    shop: session.shop,
+    filter,
+    page,
+    pageSize,
+    inboxLoadMs,
+  };
 };
 
 async function createProductWithColorAndMedia(
@@ -252,9 +294,50 @@ async function createProductWithColorAndMedia(
 }
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
+
+  if (intent === "bulkScan") {
+    const { enqueueScanJob } = await import("../lib/jobs.server");
+    const productIds = String(formData.get("productIds") || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    let queued = 0;
+    let deduped = 0;
+    for (const id of productIds.slice(0, 50)) {
+      const gid = id.startsWith("gid://")
+        ? id
+        : `gid://shopify/Product/${id}`;
+      const result = await enqueueScanJob({
+        shop: session.shop,
+        productId: gid,
+      });
+      if (result.deduped) deduped += 1;
+      else queued += 1;
+    }
+    return { bulkScan: { queued, deduped } };
+  }
+
+  if (intent === "retryFailedJobs") {
+    const { listScanJobs, enqueueScanJob } = await import("../lib/jobs.server");
+    const failed = await listScanJobs(session.shop, {
+      status: "failed",
+      take: 20,
+    });
+    let retried = 0;
+    for (const job of failed) {
+      await enqueueScanJob({
+        shop: session.shop,
+        productId: job.productId,
+        listingFp: `retry-${Date.now()}-${job.id}`,
+        priority: 2,
+      });
+      retried += 1;
+    }
+    return { retried };
+  }
 
   if (intent === "seedDemoB") {
     try {
@@ -416,7 +499,14 @@ const labelStyle: CSSProperties = {
 };
 
 export default function Index() {
-  const { products } = useLoaderData<typeof loader>();
+  const {
+    products,
+    health,
+    analyses,
+    jobs,
+    filter,
+    page,
+  } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
   const shopify = useAppBridge();
   const revalidator = useRevalidator();
@@ -444,6 +534,9 @@ export default function Index() {
   const isDeleting =
     fetcher.state !== "idle" &&
     fetcher.formData?.get("intent") === "deleteProduct";
+  const isBulkScanning =
+    fetcher.state !== "idle" &&
+    fetcher.formData?.get("intent") === "bulkScan";
   const deletingProductId = isDeleting
     ? String(fetcher.formData?.get("productId") || "")
     : null;
@@ -465,7 +558,9 @@ export default function Index() {
     }
     if ("created" in fetcher.data && fetcher.data.created) {
       const id = fetcher.data.created.numericId;
-      shopify.toast.show(`Created: ${fetcher.data.created.title} — analyzing…`);
+      shopify.toast.show(
+        `Created: ${fetcher.data.created.title}. Analysis queued — continue working.`,
+      );
       revalidator.revalidate();
       if (lastRedirectedIdRef.current !== id) {
         lastRedirectedIdRef.current = id;
@@ -474,7 +569,17 @@ export default function Index() {
     }
     if ("deleted" in fetcher.data && fetcher.data.deleted) {
       shopify.toast.show(`Deleted: ${fetcher.data.deleted.title}`);
-      setPendingDelete(null);
+      queueMicrotask(() => setPendingDelete(null));
+      revalidator.revalidate();
+    }
+    if ("bulkScan" in fetcher.data && fetcher.data.bulkScan) {
+      shopify.toast.show(
+        `Queued ${fetcher.data.bulkScan.queued} scans (${fetcher.data.bulkScan.deduped} already queued). Results appear in Inbox when ready.`,
+      );
+      revalidator.revalidate();
+    }
+    if ("retried" in fetcher.data && fetcher.data.retried != null) {
+      shopify.toast.show(`Retried ${fetcher.data.retried} failed scans`);
       revalidator.revalidate();
     }
     if ("error" in fetcher.data && fetcher.data.error) {
@@ -504,8 +609,247 @@ export default function Index() {
   const seeded =
     fetcher.data && "seeded" in fetcher.data ? fetcher.data.seeded : null;
 
+  const queueBulkScan = () => {
+    const ids = products.map((p: { id: string }) => p.id).join(",");
+    fetcher.submit({ intent: "bulkScan", productIds: ids }, { method: "POST" });
+  };
+
+  const setFilter = (next: string) => {
+    navigate(`/app?filter=${encodeURIComponent(next)}&page=1`);
+  };
+
+  const confidenceBand = (score: number) =>
+    score >= 0.85 ? "High" : score >= 0.55 ? "Medium" : "Low";
+
+  const primaryIssue = (issuesJson: string): string => {
+    try {
+      const issues = JSON.parse(issuesJson) as Array<{
+        signal: string;
+        verdict: string;
+      }>;
+      const mismatch = issues.find((i) => i.verdict === "MISMATCH");
+      if (mismatch) {
+        if (mismatch.signal === "productType") return "Product type";
+        return mismatch.signal.charAt(0).toUpperCase() + mismatch.signal.slice(1);
+      }
+      const uncertain = issues.find((i) => i.verdict === "UNCERTAIN");
+      if (uncertain) return uncertain.signal;
+    } catch {
+      /* ignore */
+    }
+    return "—";
+  };
+
+  const attrLines = Object.entries(health.byAttribute).sort(
+    (a, b) => b[1] - a[1],
+  );
+
+  const activeJobs = jobs.filter(
+    (j) => j.status === "queued" || j.status === "running",
+  ).length;
+  const failedJobs = jobs.filter((j) => j.status === "failed").length;
+  const doneJobs = jobs.filter((j) => j.status === "done").length;
+
   return (
-    <s-page heading="Visual Listing Guardian">
+    <s-page heading="Catalog Health">
+      <s-section heading="What needs my attention?">
+        <s-stack direction="block" gap="large">
+          <s-stack direction="block" gap="small">
+            <s-paragraph>
+              {health.needsAttention > 0
+                ? `${health.needsAttention} listing${health.needsAttention === 1 ? "" : "s"} need attention`
+                : health.totalScanned === 0
+                  ? "No products scanned yet. Open Guardian on a product or queue a catalog scan."
+                  : "All scanned listings look healthy."}
+            </s-paragraph>
+
+            {attrLines.length > 0 ? (
+              <s-stack direction="inline" gap="small">
+                {attrLines.map(([attr, count]) => (
+                  <s-badge key={attr} tone="critical">
+                    {count} {attr === "productType" ? "Product type" : attr}
+                  </s-badge>
+                ))}
+              </s-stack>
+            ) : null}
+          </s-stack>
+
+          <s-stack direction="inline" gap="small">
+            <s-badge>{health.totalScanned} scanned</s-badge>
+            <s-badge tone="critical">
+              {health.needsAttention} need attention
+            </s-badge>
+            <s-badge tone="caution">{health.uncertain} uncertain</s-badge>
+            <s-badge tone="success">{health.healthy} healthy</s-badge>
+            <s-badge>{health.recentlyFixed} fixed (7d)</s-badge>
+          </s-stack>
+
+          <s-stack direction="inline" gap="base" alignItems="center">
+            <s-button
+              variant="primary"
+              onClick={queueBulkScan}
+              disabled={isBulkScanning}
+              {...(isBulkScanning ? { loading: true } : {})}
+            >
+              {isBulkScanning ? "Queueing…" : "Scan catalog"}
+            </s-button>
+            <s-button
+              onClick={() =>
+                fetcher.submit({ intent: "retryFailedJobs" }, { method: "POST" })
+              }
+            >
+              Retry failed scans
+            </s-button>
+            <s-link href="/app/settings">Settings</s-link>
+          </s-stack>
+        </s-stack>
+      </s-section>
+
+      <s-section heading="Needs attention">
+        <s-stack direction="block" gap="large">
+          <s-stack direction="inline" gap="small">
+            <s-button
+              {...(filter === "attention" ? { variant: "primary" } : {})}
+              onClick={() => setFilter("attention")}
+            >
+              Needs attention
+            </s-button>
+            <s-button
+              {...(filter === "uncertain" ? { variant: "primary" } : {})}
+              onClick={() => setFilter("uncertain")}
+            >
+              Uncertain
+            </s-button>
+            <s-button
+              {...(filter === "healthy" ? { variant: "primary" } : {})}
+              onClick={() => setFilter("healthy")}
+            >
+              Healthy
+            </s-button>
+            <s-button
+              {...(filter === "all" ? { variant: "primary" } : {})}
+              onClick={() => setFilter("all")}
+            >
+              All
+            </s-button>
+          </s-stack>
+
+          {analyses.length === 0 ? (
+            <s-paragraph>
+              Nothing in this view yet. Scan the catalog or open Guardian on a
+              product — results persist here without re-analyzing on page load.
+            </s-paragraph>
+          ) : (
+            <s-stack direction="block" gap="base">
+              {analyses.map((row) => {
+                const numericId =
+                  row.productId.split("/").pop() ?? row.productId;
+                const issue = primaryIssue(row.issuesJson);
+                const band = confidenceBand(row.overallConfidence);
+                const statusLabel =
+                  row.verdict === "MISMATCH"
+                    ? "Mismatch"
+                    : row.verdict === "UNCERTAIN"
+                      ? "Uncertain"
+                      : row.verdict === "MATCH"
+                        ? "Healthy"
+                        : row.verdict;
+                const statusTone =
+                  row.verdict === "MISMATCH"
+                    ? ("critical" as const)
+                    : row.verdict === "UNCERTAIN"
+                      ? ("caution" as const)
+                      : row.verdict === "MATCH"
+                        ? ("success" as const)
+                        : undefined;
+                return (
+                  <s-box
+                    key={row.id}
+                    padding="large"
+                    borderWidth="base"
+                    borderRadius="large"
+                    background="base"
+                    inlineSize="100%"
+                  >
+                    <s-stack
+                      direction="inline"
+                      gap="large"
+                      alignItems="center"
+                      justifyContent="space-between"
+                      inlineSize="100%"
+                    >
+                      <s-stack direction="block" gap="small">
+                        <s-text type="strong">
+                          {row.productTitle || row.productId}
+                        </s-text>
+                        <s-stack direction="inline" gap="small">
+                          <s-badge {...(statusTone ? { tone: statusTone } : {})}>
+                            {statusLabel}
+                          </s-badge>
+                          {issue !== "—" ? (
+                            <s-badge>{issue}</s-badge>
+                          ) : null}
+                          <s-badge>{band} confidence</s-badge>
+                        </s-stack>
+                      </s-stack>
+                      <s-button
+                        variant="primary"
+                        onClick={() =>
+                          navigate(`/app/guardian/${numericId}`)
+                        }
+                      >
+                        Review
+                      </s-button>
+                    </s-stack>
+                  </s-box>
+                );
+              })}
+              {analyses.length >= 25 ? (
+                <s-stack
+                  direction="inline"
+                  gap="base"
+                  alignItems="center"
+                  justifyContent="center"
+                >
+                  <s-button
+                    disabled={page <= 1}
+                    onClick={() =>
+                      navigate(
+                        `/app?filter=${encodeURIComponent(filter)}&page=${page - 1}`,
+                      )
+                    }
+                  >
+                    Previous
+                  </s-button>
+                  <s-text>Page {page}</s-text>
+                  <s-button
+                    onClick={() =>
+                      navigate(
+                        `/app?filter=${encodeURIComponent(filter)}&page=${page + 1}`,
+                      )
+                    }
+                  >
+                    Next
+                  </s-button>
+                </s-stack>
+              ) : null}
+            </s-stack>
+          )}
+        </s-stack>
+      </s-section>
+
+      {jobs.length > 0 ? (
+        <s-section heading="Scan jobs">
+          <s-stack direction="inline" gap="small" alignItems="center">
+            <s-badge>{activeJobs} active</s-badge>
+            <s-badge {...(failedJobs > 0 ? { tone: "critical" as const } : {})}>
+              {failedJobs} failed
+            </s-badge>
+            <s-badge tone="success">{doneJobs} done</s-badge>
+          </s-stack>
+        </s-section>
+      ) : null}
+
       <s-section heading="Sellenvo Vision">
         <s-paragraph>
           Create any test product below, or use Demo Product B for the classic
@@ -697,51 +1041,65 @@ export default function Index() {
               }) => (
                 <s-box
                   key={product.id}
-                  padding="base"
+                  padding="large"
                   borderWidth="base"
-                  borderRadius="base"
+                  borderRadius="large"
+                  background="base"
+                  inlineSize="100%"
                 >
-                  <s-stack direction="inline" gap="base">
-                    {product.imageUrl ? (
-                      <s-thumbnail
-                        src={product.imageUrl}
-                        alt={product.title}
-                        size="small"
-                      />
-                    ) : null}
-                    <s-stack direction="block" gap="small">
-                      <s-heading>{product.title}</s-heading>
-                      <s-paragraph>
-                        Color: {product.color ?? "—"} · Type:{" "}
-                        {product.productType || "—"}
-                      </s-paragraph>
-                      {product.description ? (
-                        <s-paragraph>
-                          {product.description.length > 140
-                            ? `${product.description.slice(0, 140)}…`
-                            : product.description}
-                        </s-paragraph>
+                  <s-stack
+                    direction="inline"
+                    gap="large"
+                    alignItems="start"
+                    justifyContent="space-between"
+                    inlineSize="100%"
+                  >
+                    <s-stack direction="inline" gap="base" alignItems="start">
+                      {product.imageUrl ? (
+                        <s-thumbnail
+                          src={product.imageUrl}
+                          alt={product.title}
+                          size="small"
+                        />
                       ) : null}
-                      <s-stack direction="inline" gap="base">
-                        <s-button
-                          variant="primary"
-                          href={`/app/guardian/${product.numericId}`}
-                        >
-                          Open Guardian
-                        </s-button>
-                        <s-button
-                          tone="critical"
-                          onClick={() =>
-                            deleteProduct(product.id, product.title)
-                          }
-                          disabled={isDeleting}
-                          {...(deletingProductId === product.id
-                            ? { loading: true }
-                            : {})}
-                        >
-                          Delete
-                        </s-button>
+                      <s-stack direction="block" gap="small">
+                        <s-heading>{product.title}</s-heading>
+                        <s-stack direction="inline" gap="small">
+                          <s-badge>
+                            Color: {product.color ?? "—"}
+                          </s-badge>
+                          <s-badge>
+                            Type: {product.productType || "—"}
+                          </s-badge>
+                        </s-stack>
+                        {product.description ? (
+                          <s-paragraph>
+                            {product.description.length > 140
+                              ? `${product.description.slice(0, 140)}…`
+                              : product.description}
+                          </s-paragraph>
+                        ) : null}
                       </s-stack>
+                    </s-stack>
+                    <s-stack direction="inline" gap="base">
+                      <s-button
+                        variant="primary"
+                        href={`/app/guardian/${product.numericId}`}
+                      >
+                        Open Guardian
+                      </s-button>
+                      <s-button
+                        tone="critical"
+                        onClick={() =>
+                          deleteProduct(product.id, product.title)
+                        }
+                        disabled={isDeleting}
+                        {...(deletingProductId === product.id
+                          ? { loading: true }
+                          : {})}
+                      >
+                        Delete
+                      </s-button>
                     </s-stack>
                   </s-stack>
                 </s-box>

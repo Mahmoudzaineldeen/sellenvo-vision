@@ -1,0 +1,4 @@
+# Placeholder for real-image evaluation results (JSONL).
+# See docs/EVALUATION.md and scripts/eval-scorecard.ts
+# Example line:
+# {"id":"E01","attribute":"color","claimed":"Red","detected":"Black","labelCorrect":true,"suggestedFix":"Black","fixCorrect":true,"verdict":"MISMATCH"}

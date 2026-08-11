@@ -8,6 +8,11 @@ export const VisionResponseSchema = z.object({
   productTypeConfidence: z.number().min(0).max(1),
   material: z.string().optional(),
   materialConfidence: z.number().min(0).max(1).optional(),
+  /** EXPERIMENTAL — only requested when experimental pack enabled */
+  pattern: z.string().optional(),
+  patternConfidence: z.number().min(0).max(1).optional(),
+  finish: z.string().optional(),
+  finishConfidence: z.number().min(0).max(1).optional(),
   imageQuality: z.enum(["good", "fair", "poor"]),
   reasoning: z.string(),
 });
@@ -18,6 +23,10 @@ export interface ListingFacts {
   productTitle: string;
   productType: string | null;
   claimedMaterial: string | null;
+  /** Where claimedMaterial came from */
+  materialSource?: "metafield" | "title" | null;
+  claimedPattern?: string | null;
+  claimedFinish?: string | null;
 }
 
 export interface VisualFacts {
@@ -28,16 +37,32 @@ export interface VisualFacts {
   visionProductTypeConfidence: number;
   visionMaterial: string | null;
   visionMaterialConfidence: number | null;
+  visionPattern?: string | null;
+  visionPatternConfidence?: number | null;
+  visionFinish?: string | null;
+  visionFinishConfidence?: number | null;
   imageQuality: "good" | "fair" | "poor";
   pixelColor?: string;
   pixelHex?: string;
   pixelConfidence?: number;
 }
 
-export type Verdict = "MATCH" | "MISMATCH" | "UNCERTAIN";
+export type Verdict =
+  | "MATCH"
+  | "MISMATCH"
+  | "UNCERTAIN"
+  | "NOT_DETECTABLE"
+  | "NOT_APPLICABLE";
+
+export type SignalKey =
+  | "color"
+  | "productType"
+  | "material"
+  | "pattern"
+  | "finish";
 
 export interface SignalResult {
-  signal: "color" | "productType" | "material";
+  signal: SignalKey;
   claimed: string | null;
   detected: string | null;
   confidence: number | null;
@@ -46,17 +71,29 @@ export interface SignalResult {
 }
 
 export interface ConsistencyIssue {
-  signal: "color" | "productType" | "material";
+  signal: SignalKey;
   claimed: string | null;
   detected: string;
   confidence: number;
+  /** Issues that affect health are only MISMATCH or UNCERTAIN */
   verdict: "MISMATCH" | "UNCERTAIN";
   evidence: string;
 }
 
-export type FixableSignal = "color" | "productType" | "material";
+export type FixableSignal =
+  | "color"
+  | "productType"
+  | "material"
+  | "pattern"
+  | "finish";
 
-export const FixableSignalSchema = z.enum(["color", "productType", "material"]);
+export const FixableSignalSchema = z.enum([
+  "color",
+  "productType",
+  "material",
+  "pattern",
+  "finish",
+]);
 
 export const SuggestedFixSchema = z.object({
   field: FixableSignalSchema,

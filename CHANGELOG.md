@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+- Perf/UX: Apply Fix uses targeted recheck (no vision/image download); never falls back to full analysis on mutation path
+- Perf: parallel metafields/settings, audit writes, Shopify verify, metafield upserts
+- Perf: Catalog Health SQL latest-per-product + pagination; persist-first parallel loader
+- UX: Inbox “What needs my attention?” hierarchy; confidence bands; Review CTA
+- UX: Guardian claimed/detected/evidence cards without raw percentages
+- Docs: `docs/PERFORMANCE_UX_REPORT.md`
+
+- Catalog Integrity: attribute registry (PRODUCTION/EXPERIMENTAL/DISABLED/REJECTED) with evaluation gate
+- Verdicts: NOT_DETECTABLE / NOT_APPLICABLE (never become MISMATCH)
+- Material metafield-first (`sellenvo.material`); title rewrite via ShopSettings, default OFF
+- Pattern + Finish EXPERIMENTAL (confirm-only, gated)
+- Prisma: Analysis, ScanJob, AuditEvent, ShopSettings, VisionFeedback + uninstall cleanup
+- Catalog Health Inbox home; bulk scan jobs (in-process, concurrency 1–2)
+- Server-side FixPolicyEngine; SSRF-hardened image fetch
+- Confidence bands High/Medium/Low; Vision was wrong feedback; Apply All Safe Fixes
+- Webhooks: products/create + products/update enqueue scans
+- Tests: `test:registry`, `test:mutations`; CI runs both
+- Docs: `docs/CATALOG_INTEGRITY.md`; FAFR in EVALUATION.md
+
 - Perf: cache vision/pixel results by product+image; post-fix uses listing-only recheck (skips Groq when image unchanged)
 - UX: Apply All Fixes (batched, parallel-safe), Edit per signal, auto-analyze on Guardian open / after product create
 - UX: non-blocking progress (“Updating Shopify…”, bulk ✓/✕), requestId stale-response guard, no alert() for fix/analysis feedback

@@ -22,24 +22,20 @@ async function downloadImage(
   url: string,
 ): Promise<{ bytes: Buffer; filename: string; mimeType: string } | null> {
   try {
-    const res = await fetch(url, {
-      headers: { "User-Agent": "SellenvoVisionGuardian/1.0" },
-      signal: AbortSignal.timeout(20000),
+    const { fetchImageSafely } = await import("./ssrf.server");
+    const { buffer, mimeType } = await fetchImageSafely(url, {
+      timeoutMs: 20000,
+      maxBytes: 8_000_000,
     });
-    if (!res.ok) return null;
-    const mimeType = (res.headers.get("content-type") || "image/jpeg")
-      .split(";")[0]
-      .trim();
+    if (buffer.length < 1000) return null;
     if (!mimeType.startsWith("image/")) return null;
-    const bytes = Buffer.from(await res.arrayBuffer());
-    if (bytes.length < 1000) return null;
     const ext =
       mimeType.includes("png")
         ? "png"
         : mimeType.includes("webp")
           ? "webp"
           : "jpg";
-    return { bytes, filename: `demo-wallet.${ext}`, mimeType };
+    return { bytes: buffer, filename: `demo-wallet.${ext}`, mimeType };
   } catch (err) {
     console.warn("[attach-demo] download failed:", url, err);
     return null;

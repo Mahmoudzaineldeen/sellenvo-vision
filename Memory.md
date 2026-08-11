@@ -1,10 +1,15 @@
 # Memory — sellenvo-vision
 
 ## State
-Phases 1–8 hardening complete for production-readiness pass: safety, AI reliability, mutations, UX, structured logs, adversarial/contract tests, architecture docs + evaluation spec.
+Catalog Integrity roadmap implemented (Phases 1–4 foundation):
+registry + metafield material + persist/audit + Catalog Health + SSRF/policy +
+pattern/finish EXPERIMENTAL + jobs/webhooks + eval scorecard scaffold.
 
 ## Validate
-`npm run test:consistency` · `npm run typecheck`
+`npm run test:all` · `npm run typecheck` · `npm run lint` · `npm run build` · `npx prisma validate`
+
+## Readiness
+**PILOT READY** — not App Store ready until real-image FAFR measured.
 
 ## Docs
-`docs/ARCHITECTURE.md` · `AI_PIPELINE.md` · `MUTATIONS.md` · `FAILURE_MODES.md` · `EVALUATION.md`
+`docs/CATALOG_INTEGRITY.md` · `EVALUATION.md` · `ARCHITECTURE.md`

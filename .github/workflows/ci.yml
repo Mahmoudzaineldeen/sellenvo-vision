@@ -38,5 +38,11 @@ jobs:
       - name: Run consistency unit tests
         run: npm run test:consistency
 
+      - name: Run attribute registry tests
+        run: npm run test:registry
+
+      - name: Run mutation integration tests
+        run: npm run test:mutations
+
       - name: Build application
         run: npm run build
