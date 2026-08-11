@@ -190,7 +190,7 @@ Optional: multiple Groq keys rotate per request (TPD shared) · `OPENROUTER_API_
 **Docs:** [Privacy](PRIVACY.md) · [Architecture](docs/ARCHITECTURE.md) · [AI pipeline](docs/AI_PIPELINE.md) · [Mutations](docs/MUTATIONS.md) · [Evaluation](docs/EVALUATION.md) · [Catalog Integrity](docs/CATALOG_INTEGRITY.md)
 
 ```bash
-npm run test:all           # consistency + registry + mutations + settings
+npm run test:all           # consistency + registry + mutations + settings + hardening
 npm run typecheck && npm run lint && npm run build
 npx tsx scripts/eval-scorecard.ts
 npx tsx scripts/test-key-rotation.ts

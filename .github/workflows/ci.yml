@@ -33,7 +33,7 @@ jobs:
         run: npm run lint
 
       - name: Validate Prisma
-        run: npx prisma generate && npx prisma validate
+        run: npx prisma generate && npx prisma validate && npx prisma migrate deploy
 
       - name: Run consistency unit tests
         run: npm run test:consistency
