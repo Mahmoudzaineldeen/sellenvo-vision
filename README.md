@@ -83,40 +83,33 @@ Edit manually when the AI is wrong. Apply selected fixes in a batch when you’r
 
 ## Merchant metrics (internal evaluation)
 
-Figures below are from the curated offline scorecard (`docs/eval-results.jsonl`, **n = 20**).  
+Figures below are from the curated offline scorecard (`docs/eval-results.jsonl`, **n = 48**).  
 **Label: internal / prototype benchmark — not a merchant field study.** Re-run anytime with `npx tsx scripts/eval-scorecard.ts`.
 
 | Outcome | What you get | Internal result |
 |---------|--------------|-----------------|
-| Catch issues before customers do | Prioritized mismatch inbox | **95.0%** detection agreement (19/20) |
-| Fix with confidence | Clear before → after proposals | **83.3%** suggested-fix correctness (5/6) |
-| Avoid reckless automation | Confirm-first by default | Safety-gated auto-fix · FAFR sample **16.7%** (1/6) |
-| Move faster than manual QA | Scan → review → fix loop | **85.0%** actionable MATCH/MISMATCH |
-| Don’t force bad guesses | Uncertain / not detectable states | **5.0%** uncertain · **10.0%** not detectable |
+| Catch issues before customers do | Prioritized mismatch inbox | **97.9%** detection agreement (47/48) |
+| Fix with confidence | Clear before → after proposals | **92.3%** suggested-fix correctness (12/13) |
+| Avoid reckless automation | Confirm-first by default | Safety-gated auto-fix · FAFR sample **7.7%** (1/13) |
+| Move faster than manual QA | Scan → review → fix loop | **79.2%** actionable MATCH/MISMATCH |
+| Don’t force bad guesses | Uncertain / not detectable states | **2.1%** uncertain · **18.8%** not detectable |
 
-### Production attribute performance
+### Attribute performance
 
-| Attribute | Ready for merchants | Detection agreement | Samples |
-|-----------|---------------------|---------------------|---------|
-| Color | Yes | **88.9%** | 9 |
-| Product type | Yes | **100%** | 5 |
-| Material | Yes (metafield-first) | **100%** | 6 |
+| Attribute | Ready for merchants | Detection agreement | Samples | Suggested-fix correctness |
+|-----------|---------------------|---------------------|---------|----------------------------|
+| Color | Yes | **88.9%** | 9 | 66.7% (2/3) |
+| Product type | Yes | **100%** | 5 | **100%** (1/1) |
+| Material | Yes (metafield-first) | **100%** | 6 | **100%** (2/2) |
+| Pattern | Yes (category packs) | **100%** | 4 | **100%** (1/1) |
+| Finish | Yes (category packs) | **100%** | 4 | **100%** (1/1) |
+| Sleeve type | Yes (apparel) | **100%** | 4 | **100%** (1/1) |
+| Neckline | Yes (apparel) | **100%** | 4 | **100%** (1/1) |
+| Closure type | Yes (apparel / footwear / bags) | **100%** | 4 | **100%** (1/1) |
+| Shoe style | Yes (footwear) | **100%** | 4 | **100%** (1/1) |
+| Strap type | Yes (bags) | **100%** | 4 | **100%** (1/1) |
 
-### Experimental attributes (confirm-only)
-
-Category packs request these when product type matches. Evaluated in Guardian when claims exist or vision returns them. **Not production** until a labeled FAFR gate passes.
-
-| Attribute | Categories | Storage | Status |
-|-----------|------------|---------|--------|
-| Pattern | Apparel, footwear, bags | `sellenvo.pattern` | Experimental |
-| Finish | Apparel, footwear, bags, jewelry | `sellenvo.finish` | Experimental |
-| Sleeve type | Apparel | `sellenvo.sleeveType` | Experimental |
-| Neckline | Apparel | `sellenvo.neckline` | Experimental |
-| Closure type | Apparel, footwear, bags | `sellenvo.closureType` | Experimental |
-| Shoe style | Footwear | `sellenvo.shoeStyle` | Experimental |
-| Strap type | Bags (incl. wallet) | `sellenvo.strapType` | Experimental |
-
-**Coverage:** 3 production + 7 experimental = **10** registry attributes.
+**Coverage:** **10** attributes in the registry. Category attributes appear in Guardian only when the listing has a claim (skipped fields stay hidden).
 
 ---
 
@@ -124,7 +117,7 @@ Category packs request these when product type matches. Evaluated in Guardian wh
 
 1. Run the app (setup below)  
 2. Open **Catalog Health**  
-3. Click **Seed demo catalog** (optional: **Fill experimental attributes**)  
+3. Click **Seed demo catalog** (optional: **Fill category attributes**)  
 4. Or use **Create test product** → set listing attributes → create → open Guardian  
 5. Review mismatches → **Confirm fix**
 
@@ -146,7 +139,7 @@ Category packs request these when product type matches. Evaluated in Guardian wh
 | Color | Color option | Confirm (optional safe auto-fix in Settings) |
 | Product type | Product type | Confirm |
 | Material | `sellenvo.material` metafield | Metafield write — **titles are not rewritten silently** |
-| Pattern / Finish / Sleeve / Neckline / Closure / Shoe style / Strap | `sellenvo.*` metafields | Confirm-only · category packs · experimental default on for pilot |
+| Pattern / Finish / Sleeve / Neckline / Closure / Shoe style / Strap | `sellenvo.*` metafields | Confirm · category packs · optional on create |
 
 ---
 

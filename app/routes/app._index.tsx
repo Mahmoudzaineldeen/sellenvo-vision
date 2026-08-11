@@ -478,7 +478,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         productType: "Apparel",
         color: "Blue",
         imageUrl: DEMO_BLACK_IMAGE,
-        note: "Apparel pack — sleeve/neckline/closure experimental claims",
+        note: "Apparel pack — sleeve/neckline/closure claims",
       },
       {
         key: "footwear",
@@ -486,7 +486,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         productType: "Shoe",
         color: "White",
         imageUrl: DEMO_BLACK_IMAGE,
-        note: "Footwear pack — shoe style / closure experimental claims",
+        note: "Footwear pack — shoe style / closure claims",
       },
       {
         key: "bag",
@@ -494,7 +494,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         productType: "Handbag",
         color: "Black",
         imageUrl: DEMO_BLACK_IMAGE,
-        note: "Bags pack — strap / closure experimental claims",
+        note: "Bags pack — strap / closure claims",
       },
     ];
 
@@ -895,7 +895,7 @@ export default function Index() {
       const errNote =
         s.errors?.length > 0 ? ` (${s.errors.length} warnings)` : "";
       shopify.toast.show(
-        `Filled ${s.metafieldsWritten} experimental attributes on ${s.productsTouched} products${errNote}. Queued ${s.scansQueued ?? 0} re-scans.`,
+        `Filled ${s.metafieldsWritten} category attributes on ${s.productsTouched} products${errNote}. Queued ${s.scansQueued ?? 0} re-scans.`,
       );
       revalidator.revalidate();
     }
@@ -1366,9 +1366,9 @@ export default function Index() {
           <s-paragraph>
             These actions create explicitly labeled demo products for testing.
             They are not merchant catalog data and titles are prefixed with
-            [Demo]. Use “Fill experimental attributes” to backfill sleeve,
+            [Demo]. Use “Fill category attributes” to backfill sleeve,
             neckline, closure, shoe style, strap, pattern, and finish on
-            existing products (enables experimental mode in Settings).
+            existing products.
           </s-paragraph>
         </s-banner>
         <s-stack direction="inline" gap="base">
@@ -1387,7 +1387,7 @@ export default function Index() {
               )
             }
           >
-            Fill experimental attributes
+            Fill category attributes
           </s-button>
           <s-button
             onClick={() =>
@@ -1519,7 +1519,6 @@ export default function Index() {
                       <div key={field.key} style={{ minWidth: 200 }}>
                         <label style={labelStyle}>
                           {field.label}
-                          {field.experimental ? " (experimental)" : ""}
                           <s-stack direction="inline" gap="small">
                             <select
                               name={field.key}

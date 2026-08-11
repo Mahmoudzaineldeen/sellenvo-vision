@@ -36,7 +36,7 @@ function experimentalDefinitions() {
     return {
       key: key as SellenvoMetafieldKey,
       name: def?.label ?? key,
-      description: `${def?.label ?? key} (experimental — Sellenvo Vision)`,
+      description: `${def?.label ?? key} — Sellenvo Vision`,
     };
   });
 }

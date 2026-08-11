@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Docs: README metrics refreshed from internal scorecard (n=20) + 10-attribute coverage
+- Docs: README metrics refreshed (n=48 scorecard) · category attributes in Attribute performance · removed “experimental” UI labels
 - Experimental attributes (confirm-only, Settings-gated): sleeve type, neckline, closure type, shoe style, strap type — category packs + `sellenvo.*` metafields
 - Registry-driven experimental signal eval / metafield mutate+verify (pattern/finish + new attrs)
 - Groq multi-key round-robin (primary + fallback + `GROQ_API_KEYS`)
