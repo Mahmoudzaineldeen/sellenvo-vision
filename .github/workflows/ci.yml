@@ -44,5 +44,11 @@ jobs:
       - name: Run mutation integration tests
         run: npm run test:mutations
 
+      - name: Run settings effect tests
+        run: npm run test:settings
+
+      - name: Run hardening tests
+        run: npm run test:hardening
+
       - name: Build application
         run: npm run build

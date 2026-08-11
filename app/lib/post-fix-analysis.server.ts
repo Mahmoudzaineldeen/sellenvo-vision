@@ -9,6 +9,7 @@ import {
   findColorOptionIds,
 } from "./consistency.server";
 import { getCachedVisual } from "./vision-cache.server";
+import { visionAnalysisContract } from "./vision-analysis-contract";
 import { getShopSettings } from "./shop-settings.server";
 import { persistAnalysis } from "./analysis-persist.server";
 import { logEvent } from "./logger.server";
@@ -59,15 +60,6 @@ export async function recomputeAnalysisAfterFix(args: {
     return { ok: false, error: "No product image", reason: "no_image" };
   }
 
-  const visual = getCachedVisual(args.product.id, imageUrl);
-  if (!visual) {
-    return {
-      ok: false,
-      error: "Vision cache miss — targeted recheck unavailable",
-      reason: "cache_miss",
-    };
-  }
-
   const consistencyStarted = Date.now();
 
   const [settings, metafields] = await Promise.all([
@@ -99,6 +91,32 @@ export async function recomputeAnalysisAfterFix(args: {
           }),
   ]);
 
+  const includeExperimental =
+    settings.showExperimentalAttributes ||
+    Boolean(
+      metafields?.pattern?.trim() ||
+        metafields?.finish?.trim() ||
+        metafields?.sleeveType?.trim() ||
+        metafields?.neckline?.trim() ||
+        metafields?.closureType?.trim() ||
+        metafields?.shoeStyle?.trim() ||
+        metafields?.strapType?.trim(),
+    ) ||
+    resolveCategoryPack(args.product.productType) !== "core";
+  const contractKey = visionAnalysisContract({
+    includeExperimental,
+    productType: args.product.productType,
+  });
+
+  const visual = getCachedVisual(args.product.id, imageUrl, contractKey);
+  if (!visual) {
+    return {
+      ok: false,
+      error: "Vision cache miss — targeted recheck unavailable",
+      reason: "cache_miss",
+    };
+  }
+
   const listing = extractListingFacts(args.product, {
     material: metafields?.material ?? undefined,
     pattern: metafields?.pattern ?? undefined,
@@ -118,18 +136,7 @@ export async function recomputeAnalysisAfterFix(args: {
     colorOptionId: colorIds?.optionId,
     colorOptionValueId: colorIds?.optionValueId,
     materialWriteMode: settings.materialWriteMode,
-    includeExperimental:
-      settings.showExperimentalAttributes ||
-      Boolean(
-        metafields?.pattern?.trim() ||
-          metafields?.finish?.trim() ||
-          metafields?.sleeveType?.trim() ||
-          metafields?.neckline?.trim() ||
-          metafields?.closureType?.trim() ||
-          metafields?.shoeStyle?.trim() ||
-          metafields?.strapType?.trim(),
-      ) ||
-      resolveCategoryPack(args.product.productType) !== "core",
+    includeExperimental,
   });
   analysis.analysisSource = "cached-recheck";
   const consistencyMs = Date.now() - consistencyStarted;
@@ -144,6 +151,7 @@ export async function recomputeAnalysisAfterFix(args: {
       listing,
       visual,
       analysis,
+      analysisContract: contractKey,
     });
   } catch {
     /* non-fatal — UI still gets updated analysis */

@@ -35,6 +35,7 @@ export async function persistAnalysis(args: {
   listing: ListingFacts;
   visual: VisualFacts;
   analysis: AnalysisResult;
+  analysisContract?: string | null;
 }): Promise<string> {
   const row = await db.analysis.create({
     data: {
@@ -44,6 +45,7 @@ export async function persistAnalysis(args: {
       imageUrl: args.imageUrl,
       imageHash: hashImageUrl(args.imageUrl),
       listingFingerprint: listingFingerprint(args.listing),
+      analysisContract: args.analysisContract ?? null,
       visualJson: JSON.stringify(args.visual),
       listingJson: JSON.stringify(args.listing),
       verdict: args.analysis.overallVerdict,
@@ -56,6 +58,24 @@ export async function persistAnalysis(args: {
     },
   });
   return row.id;
+}
+
+/** Recent successful mutations for Guardian history / revert UI. */
+export async function listRecentSuccessfulAudits(args: {
+  shop: string;
+  productId: string;
+  take?: number;
+}) {
+  return db.auditEvent.findMany({
+    where: {
+      shop: args.shop,
+      productId: args.productId,
+      success: true,
+      reason: { not: "revert" },
+    },
+    orderBy: { createdAt: "desc" },
+    take: Math.min(args.take ?? 10, 25),
+  });
 }
 
 export async function getLatestAnalysisForProduct(

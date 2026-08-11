@@ -6,7 +6,7 @@
 |--------|-------------|--------|
 | Color | `productOptionUpdate` | First Color/Colour option value name |
 | Product type | `productUpdate` | `product.productType` |
-| Material | `productUpdate` | Product **title** (keyword rewrite) |
+| Material | `metafieldsSet` (+ optional title) | `sellenvo.material` metafield by default (`materialWriteMode`) |
 
 ## Safety rules
 
@@ -25,4 +25,13 @@ See [MUTATION_CHECKLIST.md](./MUTATION_CHECKLIST.md).
 
 ## Rollback
 
-No automatic rollback. Merchant can re-edit in Shopify Admin or Apply Fix again with a corrected value.
+Successful mutations are audited (append-only). Guardian **Recent changes** offers
+**Restore previous**, which:
+
+1. Loads the latest successful non-revert audit for that attribute
+2. Re-fetches Shopify state
+3. Blocks automatically if current value ≠ audited `newValue` (stale)
+4. Allows confirmed force-restore when the merchant acknowledges the conflict
+5. Mutates back to `oldValue`, verifies, and writes a new audit (`reason: revert`)
+
+There is no silent overwrite of merchant changes after the fix.

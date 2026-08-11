@@ -1,17 +1,19 @@
 # Memory — sellenvo-vision
 
 ## State
-Catalog Integrity Phases 1–4 + expanded EXPERIMENTAL attributes:
+PILOT READY Catalog Integrity. Hardening pass 2026-08-11:
+vision analysis-contract cache; VISION_PRIMARY/FALLBACK; Guardian Restore UI;
+evidence copy without raw %; test:hardening in CI; demo:seed script.
+
 PRODUCTION: color, productType, material.
-EXPERIMENTAL (confirm-only, Settings): pattern, finish, sleeveType, neckline,
-closureType, shoeStyle, strapType — category packs apparel/footwear/bags/jewelry.
-Wired: registry → vision prompt → consistency → metafields → mutations → Guardian/FixModal.
+EXPERIMENTAL confirm-only: pattern, finish, sleeveType, neckline, closureType,
+shoeStyle, strapType (category packs).
 
 ## Validate
 `npm run test:all` · `npx tsc --noEmit` · `npm run lint` · `npm run build`
 
-## Readiness
-**PILOT READY** — do not promote experimental → PRODUCTION without FAFR/eval gate.
-
 ## Docs
-`README.md` · `docs/CATALOG_INTEGRITY.md` · `EVALUATION.md` · `ARCHITECTURE.md`
+`README.md` · `docs/ENGINEERING_REPORT.md` · `EVALUATION.md` · `ARCHITECTURE.md`
+
+## Readiness
+**PILOT READY** — no App Store accuracy claims; no experimental→PRODUCTION without FAFR.

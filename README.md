@@ -151,12 +151,13 @@ Regenerate with `npx tsx scripts/generate-eval-results.ts`, then score with `npx
 ```bash
 cd sellenvo-vision
 npm install
-npx prisma generate
+npm run setup
 cp .env.example .env
 # Add GROQ_API_KEY=... to .env
-# Optional: GROQ_API_KEY_FALLBACK=... and GROQ_API_KEYS=key2,key3 (round-robin)
+# Optional: GROQ_API_KEYS=... · OPENROUTER_API_KEY · VISION_PRIMARY_PROVIDER / VISION_FALLBACK_PROVIDER
 
-npm run dev
+npm run demo:seed   # prints demo catalog contract
+npm run dev         # then Catalog Health → Demo tools → Seed demo catalog
 ```
 
 Then open the **Preview URL** from the terminal (Shopify Admin):

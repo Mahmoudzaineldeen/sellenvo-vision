@@ -23,10 +23,12 @@
     "test:registry": "tsx scripts/test-registry.ts",
     "test:mutations": "tsx scripts/test-mutations.ts",
     "test:settings": "tsx scripts/test-settings-effects.ts",
-    "test:all": "npm run test:consistency && npm run test:registry && npm run test:mutations && npm run test:settings",
     "test:vision": "tsx scripts/test-vision-smoke.ts",
+    "test:hardening": "tsx scripts/test-hardening.ts",
+    "test:all": "npm run test:consistency && npm run test:registry && npm run test:mutations && npm run test:settings && npm run test:hardening",
     "eval:generate": "tsx scripts/generate-eval-results.ts",
-    "eval:scorecard": "tsx scripts/eval-scorecard.ts"
+    "eval:scorecard": "tsx scripts/eval-scorecard.ts",
+    "demo:seed": "tsx scripts/seed-demo-catalog.ts"
   },
   "type": "module",
   "engines": {

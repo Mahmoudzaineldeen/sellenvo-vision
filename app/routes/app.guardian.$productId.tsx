@@ -21,6 +21,7 @@ import {
   clearCachedVisual,
   setCachedVisual,
 } from "../lib/vision-cache.server";
+import { visionAnalysisContract } from "../lib/vision-analysis-contract";
 import {
   applyShopifyFixes,
   fetchProductNode,
@@ -164,6 +165,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         analysis: null as null,
         autoAnalyze: false,
         materialWriteMode: "metafield" as const,
+        recentAudits: [],
         loadError:
           "Product not found in Shopify. It may have been deleted — return to Catalog Health.",
         timings: {
@@ -178,8 +180,36 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     let analysis = null as ReturnType<typeof analysisFromPersistedRow>;
     let autoAnalyze = Boolean(normalized.hasUsableImage);
     let dbMs = 0;
+    let recentAudits: Array<{
+      id: string;
+      attribute: string;
+      oldValue: string | null;
+      newValue: string | null;
+      reason: string | null;
+      createdAt: string;
+      userId: string | null;
+    }> = [];
 
-    // Instant paint: reuse last analysis for this image (no Groq on open)
+    let materialWriteMode: "metafield" | "title" | "both" = "metafield";
+    let showExperimental = false;
+    try {
+      const { getShopSettings } = await import("../lib/shop-settings.server");
+      const settings = await getShopSettings(session.shop);
+      materialWriteMode = settings.materialWriteMode;
+      showExperimental = settings.showExperimentalAttributes;
+    } catch {
+      /* defaults */
+    }
+
+    const { resolveCategoryPack } = await import("../lib/attributes");
+    const contractKey = visionAnalysisContract({
+      includeExperimental:
+        showExperimental ||
+        resolveCategoryPack(normalized.productType) !== "core",
+      productType: normalized.productType,
+    });
+
+    // Instant paint: reuse last analysis for this image + contract (no Groq on open)
     if (normalized.imageUrl && session.shop) {
       try {
         const dbStarted = Date.now();
@@ -187,8 +217,28 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
           session.shop,
           product.id,
         );
+        const { listRecentSuccessfulAudits } = await import(
+          "../lib/analysis-persist.server"
+        );
+        const audits = await listRecentSuccessfulAudits({
+          shop: session.shop,
+          productId: product.id,
+          take: 8,
+        });
+        recentAudits = audits.map((a) => ({
+          id: a.id,
+          attribute: a.attribute,
+          oldValue: a.oldValue,
+          newValue: a.newValue,
+          reason: a.reason,
+          createdAt: a.createdAt.toISOString(),
+          userId: a.userId,
+        }));
         dbMs = Date.now() - dbStarted;
-        if (latest?.imageUrl === normalized.imageUrl) {
+        const contractOk =
+          !latest?.analysisContract ||
+          latest.analysisContract === contractKey;
+        if (latest?.imageUrl === normalized.imageUrl && contractOk) {
           const restored = analysisFromPersistedRow(latest);
           if (restored) {
             analysis = restored;
@@ -196,13 +246,19 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
             try {
               const visual = JSON.parse(latest.visualJson);
               if (visual?.visionColor) {
-                setCachedVisual(product.id, normalized.imageUrl, visual);
+                setCachedVisual(
+                  product.id,
+                  normalized.imageUrl,
+                  visual,
+                  contractKey,
+                );
               }
             } catch {
               await hydrateVisualCacheFromDb(
                 session.shop,
                 product.id,
                 normalized.imageUrl,
+                contractKey,
               );
             }
           }
@@ -210,15 +266,6 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       } catch {
         /* DB optional for loader — fall through to autoAnalyze */
       }
-    }
-
-    let materialWriteMode: "metafield" | "title" | "both" = "metafield";
-    try {
-      const { getShopSettings } = await import("../lib/shop-settings.server");
-      const settings = await getShopSettings(session.shop);
-      materialWriteMode = settings.materialWriteMode;
-    } catch {
-      /* defaults */
     }
 
     const timings = {
@@ -244,6 +291,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       analysis,
       autoAnalyze,
       materialWriteMode,
+      recentAudits,
       loadError: null,
       timings,
     };
@@ -258,6 +306,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       analysis: null,
       autoAnalyze: false,
       materialWriteMode: "metafield" as const,
+      recentAudits: [],
       loadError: message,
       timings: {
         shopifyMs: 0,
@@ -704,6 +753,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       return {
         error: `Shopify value changed since the fix. Expected "${audit.newValue}" but found "${currentValue ?? "—"}". Revert would overwrite a newer merchant change.`,
         staleRevert: true,
+        field,
         expectedValue: audit.newValue,
         currentValue: currentValue ?? null,
         oldValue: audit.oldValue,
@@ -797,6 +847,7 @@ export default function GuardianPage() {
     analysis: loaderAnalysis,
     autoAnalyze: shouldAutoAnalyze,
     materialWriteMode,
+    recentAudits: loaderAudits,
   } =
     useLoaderData<typeof loader>();
 
@@ -834,6 +885,7 @@ export default function GuardianPage() {
       initialAnalysis={loaderAnalysis}
       autoAnalyze={shouldAutoAnalyze}
       materialWriteMode={materialWriteMode}
+      initialAudits={loaderAudits ?? []}
     />
   );
 }
@@ -843,11 +895,21 @@ function GuardianContent({
   initialAnalysis,
   autoAnalyze: shouldAutoAnalyze,
   materialWriteMode,
+  initialAudits,
 }: {
   initialProduct: ReturnType<typeof normalizeProduct>;
   initialAnalysis: import("../lib/types").AnalysisResult | null;
   autoAnalyze: boolean;
   materialWriteMode: "metafield" | "title" | "both";
+  initialAudits: Array<{
+    id: string;
+    attribute: string;
+    oldValue: string | null;
+    newValue: string | null;
+    reason: string | null;
+    createdAt: string;
+    userId: string | null;
+  }>;
 }) {
   const fetcher = useFetcher<typeof action>();
   const shopify = useAppBridge();
@@ -857,6 +919,13 @@ function GuardianContent({
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(
     initialAnalysis,
   );
+  const [recentAudits, setRecentAudits] = useState(initialAudits);
+  const [staleRevert, setStaleRevert] = useState<{
+    field: FixableSignal;
+    expectedValue: string;
+    currentValue: string | null;
+    oldValue: string;
+  } | null>(null);
   const [analyzedAt, setAnalyzedAt] = useState<string | null>(
     initialAnalysis ? new Date().toISOString() : null,
   );
@@ -883,7 +952,10 @@ function GuardianContent({
       ? String(fetcher.formData?.get("intent") || "")
       : "";
   const isAnalyzing = intent === "analyze" || intent === "recheck";
-  const isFixing = intent === "applyFix" || intent === "applyAllFixes";
+  const isFixing =
+    intent === "applyFix" ||
+    intent === "applyAllFixes" ||
+    intent === "revert";
   const isAttachingImage = intent === "attachDemoImage";
   const busy = fetcher.state !== "idle";
 
@@ -892,6 +964,21 @@ function GuardianContent({
     setLatestRequestId(id);
     return String(id);
   }, [latestRequestId]);
+
+  const requestRevert = useCallback(
+    (field: FixableSignal, force = false) => {
+      const fd = new FormData();
+      fd.set("intent", "revert");
+      fd.set("field", field);
+      if (force) fd.set("force", "1");
+      fd.set("requestId", nextRequestId());
+      setFixPhase("updating");
+      setActiveFixField(field);
+      setStaleRevert(null);
+      fetcher.submit(fd, { method: "post" });
+    },
+    [fetcher, nextRequestId],
+  );
 
   // Sync fetcher payloads into React state during render (not in an effect).
   if (fetcher.data !== seenFetcherData) {
@@ -943,6 +1030,29 @@ function GuardianContent({
         setBulkSummary(`${successCount} of ${total} fixes applied`);
         setFixPhase(successCount === total ? "idle" : "error");
         setActiveFixField(null);
+      }
+      if ("revertResult" in data && data.revertResult) {
+        if (data.revertResult.product) {
+          setProduct(data.revertResult.product);
+        }
+        setFixPhase("idle");
+        setActiveFixField(null);
+        setStaleRevert(null);
+        setRecentAudits((prev) =>
+          prev.filter((a) => a.attribute !== data.revertResult!.field),
+        );
+        setAutoAnalyzeToken((t) => t + 1);
+      }
+      if ("staleRevert" in data && data.staleRevert) {
+        setFixPhase("idle");
+        setActiveFixField(null);
+        setStaleRevert({
+          field: (data.field ?? "color") as FixableSignal,
+          expectedValue: String(data.expectedValue ?? ""),
+          currentValue:
+            data.currentValue != null ? String(data.currentValue) : null,
+          oldValue: String(data.oldValue ?? ""),
+        });
       }
     }
   }
@@ -1052,7 +1162,20 @@ function GuardianContent({
       }
     }
 
-    if ("error" in data && data.error) {
+    if ("revertResult" in data && data.revertResult?.success) {
+      shopify.toast.show(
+        `${fixFieldLabel(data.revertResult.field as FixableSignal)} restored to ${data.revertResult.restoredValue}`,
+      );
+    }
+
+    if ("staleRevert" in data && data.staleRevert) {
+      shopify.toast.show(
+        "Listing changed since that fix — confirm before restoring.",
+        { isError: true },
+      );
+    }
+
+    if ("error" in data && data.error && !("staleRevert" in data && data.staleRevert)) {
       shopify.toast.show(data.error, { isError: true });
     }
   }, [fetcher.data, shopify, fixModal, latestRequestId]);
@@ -1754,6 +1877,78 @@ function GuardianContent({
                 </s-stack>
               </s-box>
             )}
+          </s-stack>
+        </s-section>
+      )}
+
+      {(recentAudits.length > 0 || staleRevert) && (
+        <s-section heading="Recent changes">
+          <s-stack direction="block" gap="base">
+            {staleRevert && (
+              <s-banner tone="warning" heading="Confirm restore">
+                <s-paragraph>
+                  {fixFieldLabel(staleRevert.field)} is now &quot;
+                  {staleRevert.currentValue ?? "—"}&quot; (expected &quot;
+                  {staleRevert.expectedValue}&quot; from the last fix). Restoring
+                  would set it back to &quot;{staleRevert.oldValue}&quot;.
+                </s-paragraph>
+                <s-stack direction="inline" gap="base">
+                  <s-button
+                    variant="primary"
+                    onClick={() => requestRevert(staleRevert.field, true)}
+                    disabled={busy}
+                  >
+                    Restore anyway
+                  </s-button>
+                  <s-button
+                    onClick={() => setStaleRevert(null)}
+                    disabled={busy}
+                  >
+                    Cancel
+                  </s-button>
+                </s-stack>
+              </s-banner>
+            )}
+            {recentAudits.map((audit) => (
+              <s-box
+                key={audit.id}
+                padding="base"
+                borderWidth="base"
+                borderRadius="base"
+                background="subdued"
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 8,
+                    alignItems: "center",
+                  }}
+                >
+                  <s-text type="strong">
+                    {fixFieldLabel(audit.attribute as FixableSignal)}
+                  </s-text>
+                  <s-text>
+                    {audit.oldValue ?? "—"} → {audit.newValue ?? "—"}
+                  </s-text>
+                  <s-text tone="neutral">
+                    {new Date(audit.createdAt).toLocaleString()}
+                  </s-text>
+                  <s-button
+                    onClick={() =>
+                      requestRevert(audit.attribute as FixableSignal)
+                    }
+                    disabled={busy}
+                    {...(intent === "revert" &&
+                    activeFixField === audit.attribute
+                      ? { loading: true }
+                      : {})}
+                  >
+                    Restore previous
+                  </s-button>
+                </div>
+              </s-box>
+            ))}
           </s-stack>
         </s-section>
       )}

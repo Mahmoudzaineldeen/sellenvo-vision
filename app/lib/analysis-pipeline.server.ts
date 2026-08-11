@@ -15,6 +15,7 @@ import {
   getCachedVisual,
   setCachedVisual,
 } from "./vision-cache.server";
+import { visionAnalysisContract } from "./vision-analysis-contract";
 import { logEvent } from "./logger.server";
 import type { AnalysisResult, VisualFacts } from "./types";
 import type { AdminClient, ProductNode } from "./shopify-fixes.server";
@@ -152,15 +153,19 @@ export async function hydrateVisualCacheFromDb(
   shop: string,
   productId: string,
   imageUrl: string,
+  contractKey: string = visionAnalysisContract(),
 ): Promise<VisualFacts | null> {
   try {
     const row = await getLatestAnalysisForProduct(shop, productId);
     if (!row?.imageUrl || row.imageUrl !== imageUrl || !row.visualJson) {
       return null;
     }
+    if (row.analysisContract && row.analysisContract !== contractKey) {
+      return null;
+    }
     const visual = JSON.parse(row.visualJson) as VisualFacts;
     if (!visual?.visionColor) return null;
-    setCachedVisual(productId, imageUrl, visual);
+    setCachedVisual(productId, imageUrl, visual, contractKey);
     return visual;
   } catch {
     return null;
@@ -314,7 +319,7 @@ async function runConsistency(
 
   const metafields = metafieldsResult;
   let materialWriteMode: "metafield" | "title" | "both" = "metafield";
-  let includeExperimental = shouldEnableExperimental({
+  const includeExperimental = shouldEnableExperimental({
     forced: opts?.includeExperimental === true,
     settingsEnabled: settingsResult?.showExperimentalAttributes === true,
     productType: product.productType,
@@ -399,7 +404,11 @@ export async function runFullAnalysis(
       imageUrl,
       visionCtx,
     );
-    setCachedVisual(product.id, imageUrl, visual);
+    const contractKey = visionAnalysisContract({
+      includeExperimental: visionCtx?.includeExperimental,
+      productType: visionCtx?.productType ?? product.productType,
+    });
+    setCachedVisual(product.id, imageUrl, visual, contractKey);
 
     const { analysis, consistencyMs, listing } = await runConsistency(
       admin,
@@ -421,6 +430,7 @@ export async function runFullAnalysis(
           listing,
           visual,
           analysis,
+          analysisContract: contractKey,
         });
       } catch (err) {
         logEvent({
@@ -475,10 +485,19 @@ export async function runFullAnalysis(
         if (product) {
           const imageUrl = getImageUrl(product);
           if (imageUrl && !isPlaceholderImage(imageUrl)) {
+            const contractKey = visionAnalysisContract({
+              includeExperimental: ctx?.includeExperimental,
+              productType: ctx?.productType ?? product.productType,
+            });
             const cached =
-              getCachedVisual(product.id, imageUrl) ??
+              getCachedVisual(product.id, imageUrl, contractKey) ??
               (ctx?.shop
-                ? await hydrateVisualCacheFromDb(ctx.shop, product.id, imageUrl)
+                ? await hydrateVisualCacheFromDb(
+                    ctx.shop,
+                    product.id,
+                    imageUrl,
+                    contractKey,
+                  )
                 : null);
             if (cached) {
               const { analysis, consistencyMs, listing } = await runConsistency(
@@ -489,7 +508,7 @@ export async function runFullAnalysis(
                 ctx,
               );
               analysis.analysisSource = "cached-recheck";
-              analysis.visionReasoning = `${analysis.visionReasoning} [Groq rate-limited — cached vision]`;
+              analysis.visionReasoning = `${analysis.visionReasoning} [Vision provider rate-limited — cached vision]`;
               if (ctx?.shop) {
                 try {
                   await persistAnalysis({
@@ -500,6 +519,7 @@ export async function runFullAnalysis(
                     listing,
                     visual: cached,
                     analysis,
+                    analysisContract: contractKey,
                   });
                 } catch {
                   /* non-fatal */
@@ -571,10 +591,19 @@ export async function runListingRecheck(
       };
     }
 
+    const contractKey = visionAnalysisContract({
+      includeExperimental: ctx?.includeExperimental,
+      productType: ctx?.productType ?? resolved.productType,
+    });
     const cached =
-      getCachedVisual(resolved.id, imageUrl) ??
+      getCachedVisual(resolved.id, imageUrl, contractKey) ??
       (ctx?.shop
-        ? await hydrateVisualCacheFromDb(ctx.shop, resolved.id, imageUrl)
+        ? await hydrateVisualCacheFromDb(
+            ctx.shop,
+            resolved.id,
+            imageUrl,
+            contractKey,
+          )
         : null);
     if (!cached) {
       return runFullAnalysis(admin, productId, ctx);
@@ -600,6 +629,7 @@ export async function runListingRecheck(
           listing,
           visual: cached,
           analysis,
+          analysisContract: contractKey,
         });
       } catch {
         /* non-fatal */

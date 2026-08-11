@@ -1,10 +1,12 @@
 /**
- * Vision provider registry — primary (Groq) with optional secondary fallback.
+ * Vision provider registry — configurable primary with optional fallback.
  *
- * Phase 1: Groq only.
- * Phase 3: OpenRouter registered when OPENROUTER_API_KEY is set.
+ * Env:
+ *   VISION_PRIMARY_PROVIDER=groq|openrouter (default: groq)
+ *   VISION_FALLBACK_PROVIDER=openrouter|groq|none (default: openrouter if key present)
  */
 
+import { isVisionRateLimitError } from "../vision.server";
 import { GroqVisionProvider } from "./groq";
 import { OpenRouterVisionProvider } from "./openrouter";
 import type {
@@ -19,37 +21,75 @@ import { logEvent } from "../logger.server";
 const groq = new GroqVisionProvider();
 const openrouter = new OpenRouterVisionProvider();
 
-let secondaryFactory: (() => VisionProvider | null) | null = () =>
-  openrouter.isAvailable() ? openrouter : null;
+const PROVIDERS: Record<VisionProviderId, VisionProvider> = {
+  groq,
+  openrouter,
+};
+
+function parseProviderId(raw: string | undefined): VisionProviderId | null {
+  const v = raw?.trim().toLowerCase();
+  if (v === "groq" || v === "openrouter") return v;
+  return null;
+}
+
+function resolvePrimaryId(): VisionProviderId {
+  return parseProviderId(process.env.VISION_PRIMARY_PROVIDER) ?? "groq";
+}
+
+function resolveFallbackId(primaryId: VisionProviderId): VisionProviderId | null {
+  const raw = process.env.VISION_FALLBACK_PROVIDER?.trim().toLowerCase();
+  if (raw === "none" || raw === "off" || raw === "false") return null;
+  const parsed = parseProviderId(raw);
+  if (parsed) return parsed === primaryId ? null : parsed;
+  // Default: prefer the other provider when available
+  return primaryId === "groq" ? "openrouter" : "groq";
+}
+
+let secondaryFactory: (() => VisionProvider | null) | null = null;
 
 /**
- * Override secondary provider (tests / future providers).
+ * Override secondary provider (tests). Pass null to restore env-based fallback.
  */
 export function registerSecondaryVisionProvider(
-  factory: () => VisionProvider | null,
+  factory: (() => VisionProvider | null) | null,
 ): void {
   secondaryFactory = factory;
 }
 
 export function getPrimaryVisionProvider(): VisionProvider {
-  return groq;
+  const id = resolvePrimaryId();
+  return PROVIDERS[id];
 }
 
 export function getSecondaryVisionProvider(): VisionProvider | null {
-  if (!secondaryFactory) return null;
-  try {
-    return secondaryFactory();
-  } catch {
-    return null;
+  if (secondaryFactory) {
+    try {
+      return secondaryFactory();
+    } catch {
+      return null;
+    }
   }
+  const primaryId = resolvePrimaryId();
+  const fallbackId = resolveFallbackId(primaryId);
+  if (!fallbackId) return null;
+  const provider = PROVIDERS[fallbackId];
+  return provider.isAvailable() ? provider : null;
 }
 
 export function listAvailableProviders(): VisionProviderId[] {
   const ids: VisionProviderId[] = [];
-  if (groq.isAvailable()) ids.push("groq");
-  const secondary = getSecondaryVisionProvider();
-  if (secondary?.isAvailable()) ids.push(secondary.id);
+  for (const p of Object.values(PROVIDERS)) {
+    if (p.isAvailable()) ids.push(p.id);
+  }
   return ids;
+}
+
+function isRetryableProviderFailure(err: unknown): boolean {
+  if (err instanceof VisionProviderError) return err.retryable;
+  if (isVisionRateLimitError(err)) return true;
+  return /rate.?limit|429|timeout|unavailable|ECONNRESET|ETIMEDOUT/i.test(
+    err instanceof Error ? err.message : String(err),
+  );
 }
 
 /**
@@ -60,8 +100,9 @@ export async function analyzeWithProviders(
   input: VisionAnalyzeInput,
 ): Promise<VisionAnalyzeResult> {
   const primary = getPrimaryVisionProvider();
+  const secondary = getSecondaryVisionProvider();
+
   if (!primary.isAvailable()) {
-    const secondary = getSecondaryVisionProvider();
     if (secondary?.isAvailable()) {
       logEvent({
         level: "warn",
@@ -74,25 +115,28 @@ export async function analyzeWithProviders(
       return secondary.analyze(input);
     }
     throw new VisionProviderError(
-      "No vision provider is configured (set GROQ_API_KEY)",
-      { code: "unavailable", providerId: primary.id, retryable: false },
+      "Analysis unavailable. Configure VISION_PRIMARY_PROVIDER credentials (e.g. GROQ_API_KEY) or a fallback provider.",
+      { code: "unavailable", providerId: primary.id, retryable: true },
     );
   }
+
+  logEvent({
+    level: "info",
+    event: "vision.provider.selected",
+    details: {
+      primary: primary.id,
+      fallback: secondary?.id ?? null,
+    },
+  });
 
   try {
     return await primary.analyze(input);
   } catch (err) {
-    const retryable =
-      err instanceof VisionProviderError
-        ? err.retryable
-        : /rate.?limit|429|timeout|unavailable/i.test(
-            err instanceof Error ? err.message : String(err),
-          );
+    if (!isRetryableProviderFailure(err)) throw err;
 
-    if (!retryable) throw err;
-
-    const secondary = getSecondaryVisionProvider();
-    if (!secondary?.isAvailable()) throw err;
+    if (!secondary?.isAvailable()) {
+      throw err;
+    }
 
     logEvent({
       level: "warn",

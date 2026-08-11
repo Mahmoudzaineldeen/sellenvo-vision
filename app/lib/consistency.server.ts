@@ -251,7 +251,7 @@ function evaluateSignal(args: {
     evidence = args.matchEvidence;
   } else if (args.confidence >= threshold) {
     verdict = "MISMATCH";
-    evidence = `${args.mismatchPrefix} (vision confidence ${Math.round(args.confidence * 100)}%).`;
+    evidence = `${args.mismatchPrefix} (high confidence evidence).`;
   } else {
     verdict = "UNCERTAIN";
     evidence = args.uncertainPrefix;
@@ -299,8 +299,7 @@ export function evaluateConsistency(
       evidence = visual.visionReasoning;
     } else if (confidence >= CONFIDENCE_THRESHOLD) {
       verdict = "MISMATCH";
-      const pct = Math.round(visual.visionConfidence * 100);
-      evidence = `Vision detected "${detected}" (vision confidence ${pct}%). Listing claims "${listing.claimedColor}".`;
+      evidence = `Image evidence shows "${detected}". Listing claims "${listing.claimedColor}".`;
       if (
         visual.pixelColor &&
         colorsMatch(visual.pixelColor, visual.visionColor)
@@ -310,7 +309,7 @@ export function evaluateConsistency(
       evidence += ` ${visual.visionReasoning}`;
     } else {
       verdict = "UNCERTAIN";
-      evidence = `Low confidence color detection. ${visual.visionReasoning}`;
+      evidence = `Uncertain color evidence. ${visual.visionReasoning}`;
     }
 
     const colorResult: SignalResult = {
@@ -346,10 +345,10 @@ export function evaluateConsistency(
       evidence = `Product type matches: listing "${listing.productType}" ≈ detected "${visual.visionProductType}".`;
     } else if (confidence >= CONFIDENCE_THRESHOLD) {
       verdict = "MISMATCH";
-      evidence = `Product type mismatch: listing "${listing.productType}" vs detected "${visual.visionProductType}" (vision confidence ${Math.round(confidence * 100)}%).`;
+      evidence = `Product type mismatch: listing "${listing.productType}" vs image evidence "${visual.visionProductType}".`;
     } else {
       verdict = "UNCERTAIN";
-      evidence = `Low confidence product type comparison: listing "${listing.productType}" vs detected "${visual.visionProductType}".`;
+      evidence = `Uncertain product type comparison: listing "${listing.productType}" vs detected "${visual.visionProductType}".`;
     }
 
     const ptResult: SignalResult = {
@@ -407,10 +406,10 @@ export function evaluateConsistency(
         evidence = `Material matches: "${claimed}".`;
       } else if (confidence >= CONFIDENCE_THRESHOLD) {
         verdict = "MISMATCH";
-        evidence = `Material mismatch: listing "${claimed}" vs detected "${detected}" (vision confidence ${Math.round(confidence * 100)}%).`;
+        evidence = `Material mismatch: listing "${claimed}" vs image evidence "${detected}".`;
       } else {
         verdict = "UNCERTAIN";
-        evidence = `Low confidence material comparison: listing "${claimed}" vs detected "${detected}".`;
+        evidence = `Uncertain material comparison: listing "${claimed}" vs detected "${detected}".`;
       }
 
       const matResult: SignalResult = {

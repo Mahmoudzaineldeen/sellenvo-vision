@@ -41,6 +41,8 @@ model Analysis {
   imageUrl           String?
   imageHash          String?
   listingFingerprint String?
+  /// Vision prompt/pack contract — invalidate when analysis semantics change
+  analysisContract   String?
   visualJson         String
   listingJson        String
   verdict            String
