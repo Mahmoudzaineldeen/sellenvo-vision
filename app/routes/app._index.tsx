@@ -11,6 +11,16 @@ import { authenticate } from "../shopify.server";
 import { DEMO_BLACK_WALLET_IMAGE_URL } from "../lib/demo-assets";
 import { uploadRemoteImageToProduct } from "../lib/attach-demo-image.server";
 import { DeleteConfirmModal } from "../components/DeleteConfirmModal";
+import {
+  EMPTY_LISTING_ATTRIBUTES,
+  apparelListingDefaults,
+  bottleListingDefaults,
+  handbagListingDefaults,
+  listingAttributeFieldsForProductType,
+  listingAttributesForSubmit,
+  pruneListingAttributesForProductType,
+  type ListingAttributeDraft,
+} from "../lib/listing-attribute-form";
 
 /**
  * Prefer a clearly black wallet when available. Wikimedia may be blocked from
@@ -462,6 +472,30 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         imageUrl: null,
         note: "Missing image — analysis should fail gracefully",
       },
+      {
+        key: "apparel",
+        title: "[Demo] Cotton Crew Shirt",
+        productType: "Apparel",
+        color: "Blue",
+        imageUrl: DEMO_BLACK_IMAGE,
+        note: "Apparel pack — sleeve/neckline/closure experimental claims",
+      },
+      {
+        key: "footwear",
+        title: "[Demo] Canvas Sneaker",
+        productType: "Shoe",
+        color: "White",
+        imageUrl: DEMO_BLACK_IMAGE,
+        note: "Footwear pack — shoe style / closure experimental claims",
+      },
+      {
+        key: "bag",
+        title: "[Demo] Crossbody Handbag",
+        productType: "Handbag",
+        color: "Black",
+        imageUrl: DEMO_BLACK_IMAGE,
+        note: "Bags pack — strap / closure experimental claims",
+      },
     ];
 
     const created: Array<{
@@ -512,6 +546,36 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     };
   }
 
+  if (intent === "seedExperimentalAttrs") {
+    try {
+      const { seedExperimentalDummyMetafields } = await import(
+        "../lib/seed-experimental-metafields.server"
+      );
+      const { enqueueScanJob } = await import("../lib/jobs.server");
+      const result = await seedExperimentalDummyMetafields({
+        admin,
+        shop: session.shop,
+      });
+      let queued = 0;
+      for (const productId of result.productIds) {
+        const enq = await enqueueScanJob({
+          shop: session.shop,
+          productId,
+        });
+        if (!enq.deduped) queued += 1;
+      }
+      return { experimentalSeed: { ...result, scansQueued: queued } };
+    } catch (err) {
+      console.error("[seedExperimentalAttrs]", err);
+      return {
+        error:
+          err instanceof Error
+            ? err.message
+            : "Failed to seed experimental attributes",
+      };
+    }
+  }
+
   if (intent === "pauseJobs") {
     const { pauseShopJobs } = await import("../lib/jobs.server");
     pauseShopJobs(session.shop);
@@ -536,6 +600,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const productType = String(formData.get("productType") || "").trim();
     const color = String(formData.get("color") || "").trim();
     const imageUrl = String(formData.get("imageUrl") || "").trim();
+    const material = String(formData.get("material") || "").trim();
+    const pattern = String(formData.get("pattern") || "").trim();
+    const finish = String(formData.get("finish") || "").trim();
+    const sleeveType = String(formData.get("sleeveType") || "").trim();
+    const neckline = String(formData.get("neckline") || "").trim();
+    const closureType = String(formData.get("closureType") || "").trim();
+    const shoeStyle = String(formData.get("shoeStyle") || "").trim();
+    const strapType = String(formData.get("strapType") || "").trim();
 
     if (!title) {
       return { error: "Title is required" };
@@ -557,6 +629,77 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         return { error: result.error ?? "Failed to create product" };
       }
       const createdProduct = result.created;
+
+      const metafieldWrites: Array<{ key: string; value: string }> = [];
+      if (material) metafieldWrites.push({ key: "material", value: material });
+      if (pattern) metafieldWrites.push({ key: "pattern", value: pattern });
+      if (finish) metafieldWrites.push({ key: "finish", value: finish });
+      if (sleeveType) {
+        metafieldWrites.push({ key: "sleeveType", value: sleeveType });
+      }
+      if (neckline) metafieldWrites.push({ key: "neckline", value: neckline });
+      if (closureType) {
+        metafieldWrites.push({ key: "closureType", value: closureType });
+      }
+      if (shoeStyle) metafieldWrites.push({ key: "shoeStyle", value: shoeStyle });
+      if (strapType) metafieldWrites.push({ key: "strapType", value: strapType });
+
+      const experimentalProvided = Boolean(
+        pattern ||
+          finish ||
+          sleeveType ||
+          neckline ||
+          closureType ||
+          shoeStyle ||
+          strapType,
+      );
+
+      if (metafieldWrites.length > 0) {
+        const {
+          ensureSellenvoMetafieldDefinitions,
+          setProductSellenvoMetafield,
+        } = await import("../lib/metafields.server");
+        await ensureSellenvoMetafieldDefinitions(admin);
+        for (const write of metafieldWrites) {
+          await setProductSellenvoMetafield(
+            admin,
+            createdProduct.productId,
+            write.key as
+              | "material"
+              | "pattern"
+              | "finish"
+              | "sleeveType"
+              | "neckline"
+              | "closureType"
+              | "shoeStyle"
+              | "strapType",
+            write.value,
+          );
+        }
+      }
+
+      if (experimentalProvided) {
+        const { upsertShopSettings } = await import(
+          "../lib/shop-settings.server"
+        );
+        await upsertShopSettings(session.shop, {
+          showExperimentalAttributes: true,
+        });
+      }
+
+      const claimSummary = [
+        material && `Material=${material}`,
+        pattern && `Pattern=${pattern}`,
+        finish && `Finish=${finish}`,
+        sleeveType && `Sleeve=${sleeveType}`,
+        neckline && `Neckline=${neckline}`,
+        closureType && `Closure=${closureType}`,
+        shoeStyle && `Shoe style=${shoeStyle}`,
+        strapType && `Strap=${strapType}`,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+
       return {
         created: {
           productId: createdProduct.productId,
@@ -567,9 +710,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           optionId: createdProduct.optionId,
           optionValueId: createdProduct.optionValueId,
           mediaWarning: createdProduct.mediaWarning,
+          claims: claimSummary || null,
           note: imageUrl
-            ? "Product created. If the image is still processing, wait a few seconds then open Guardian."
-            : "Product created without an image. Add a product photo in Shopify Admin or paste an image URL next time.",
+            ? "Listing claims saved. Open Guardian to run AI comparison against the photo."
+            : "Listing claims saved. Add a product photo, then open Guardian to run AI comparison.",
         },
       };
     } catch (err) {
@@ -673,6 +817,9 @@ export default function Index() {
   const [productType, setProductType] = useState("Apparel");
   const [color, setColor] = useState("Blue");
   const [imageUrl, setImageUrl] = useState("");
+  const [listingAttrs, setListingAttrs] = useState<ListingAttributeDraft>(
+    EMPTY_LISTING_ATTRIBUTES,
+  );
   const [pendingDelete, setPendingDelete] = useState<{
     productId: string;
     productTitle: string;
@@ -740,6 +887,15 @@ export default function Index() {
       const n = fetcher.data.demoCatalog.created.length;
       shopify.toast.show(
         `Demo catalog: ${n} products created (explicitly labeled DEMO DATA)`,
+      );
+      revalidator.revalidate();
+    }
+    if ("experimentalSeed" in fetcher.data && fetcher.data.experimentalSeed) {
+      const s = fetcher.data.experimentalSeed;
+      const errNote =
+        s.errors?.length > 0 ? ` (${s.errors.length} warnings)` : "";
+      shopify.toast.show(
+        `Filled ${s.metafieldsWritten} experimental attributes on ${s.productsTouched} products${errNote}. Queued ${s.scansQueued ?? 0} re-scans.`,
       );
       revalidator.revalidate();
     }
@@ -1210,7 +1366,9 @@ export default function Index() {
           <s-paragraph>
             These actions create explicitly labeled demo products for testing.
             They are not merchant catalog data and titles are prefixed with
-            [Demo].
+            [Demo]. Use “Fill experimental attributes” to backfill sleeve,
+            neckline, closure, shoe style, strap, pattern, and finish on
+            existing products (enables experimental mode in Settings).
           </s-paragraph>
         </s-banner>
         <s-stack direction="inline" gap="base">
@@ -1220,6 +1378,16 @@ export default function Index() {
             }
           >
             Seed demo catalog
+          </s-button>
+          <s-button
+            onClick={() =>
+              fetcher.submit(
+                { intent: "seedExperimentalAttrs" },
+                { method: "POST" },
+              )
+            }
+          >
+            Fill experimental attributes
           </s-button>
           <s-button
             onClick={() =>
@@ -1249,14 +1417,15 @@ export default function Index() {
 
       <s-section heading="Create test product">
         <s-paragraph>
-          Fill any fields to build a real Shopify product for manual testing.
-          Put material words in the title (leather, cotton, metal, …) so the
-          Guardian can extract claimed material. Color becomes the Color option.
+          Set the claims you care about (color, type, and optional attributes).
+          Skip or clear any attribute that doesn’t fit this product, then create
+          — Guardian compares the photo only to the claims you saved.
         </s-paragraph>
         <fetcher.Form
           method="POST"
           onSubmit={(e: FormEvent<HTMLFormElement>) => {
             e.preventDefault();
+            const claims = listingAttributesForSubmit(listingAttrs, productType);
             fetcher.submit(
               {
                 intent: "createTestProduct",
@@ -1265,6 +1434,14 @@ export default function Index() {
                 productType,
                 color,
                 imageUrl,
+                material: claims.material,
+                pattern: claims.pattern,
+                finish: claims.finish,
+                sleeveType: claims.sleeveType,
+                neckline: claims.neckline,
+                closureType: claims.closureType,
+                shoeStyle: claims.shoeStyle,
+                strapType: claims.strapType,
               },
               { method: "POST" },
             );
@@ -1299,7 +1476,13 @@ export default function Index() {
                 <input
                   name="productType"
                   value={productType}
-                  onChange={(e) => setProductType(e.target.value)}
+                  onChange={(e) => {
+                    const nextType = e.target.value;
+                    setProductType(nextType);
+                    setListingAttrs((prev) =>
+                      pruneListingAttributesForProductType(prev, nextType),
+                    );
+                  }}
                   placeholder="Wallet, Shoe, Bag, Apparel…"
                   style={{ ...fieldStyle, maxWidth: 240 }}
                 />
@@ -1316,6 +1499,75 @@ export default function Index() {
                 />
               </label>
             </s-stack>
+
+            <s-box
+              padding="base"
+              borderWidth="base"
+              borderRadius="base"
+              background="subdued"
+            >
+              <s-stack direction="block" gap="base">
+                <s-heading>Listing attributes (claims before AI)</s-heading>
+                <s-paragraph>
+                  Every field is optional. Leave as “Skip” or clear it if it
+                  doesn’t apply to this product — only filled values are saved.
+                  Changing product type removes attributes that no longer fit.
+                </s-paragraph>
+                <s-stack direction="inline" gap="base">
+                  {listingAttributeFieldsForProductType(productType).map(
+                    (field) => (
+                      <div key={field.key} style={{ minWidth: 200 }}>
+                        <label style={labelStyle}>
+                          {field.label}
+                          {field.experimental ? " (experimental)" : ""}
+                          <s-stack direction="inline" gap="small">
+                            <select
+                              name={field.key}
+                              value={listingAttrs[field.key]}
+                              onChange={(e) =>
+                                setListingAttrs((prev) => ({
+                                  ...prev,
+                                  [field.key]: e.target.value,
+                                }))
+                              }
+                              style={{ ...fieldStyle, maxWidth: 180 }}
+                            >
+                              <option value="">Skip — not set</option>
+                              {field.options.map((opt) => (
+                                <option key={opt} value={opt}>
+                                  {opt}
+                                </option>
+                              ))}
+                            </select>
+                            <s-button
+                              type="button"
+                              {...(listingAttrs[field.key]
+                                ? {}
+                                : { disabled: true })}
+                              onClick={() =>
+                                setListingAttrs((prev) => ({
+                                  ...prev,
+                                  [field.key]: "",
+                                }))
+                              }
+                            >
+                              Clear
+                            </s-button>
+                          </s-stack>
+                        </label>
+                      </div>
+                    ),
+                  )}
+                </s-stack>
+                <s-button
+                  type="button"
+                  onClick={() => setListingAttrs(EMPTY_LISTING_ATTRIBUTES)}
+                >
+                  Clear all attributes
+                </s-button>
+              </s-stack>
+            </s-box>
+
             <label style={labelStyle}>
               Image URL (optional, must be publicly reachable)
               <input
@@ -1337,6 +1589,21 @@ export default function Index() {
               <s-button
                 type="button"
                 onClick={() => {
+                  setTitle("Blue Cotton T-Shirt");
+                  setDescription(
+                    "Soft cotton tee. Listing color is Blue — use a photo of a different color to test mismatch.",
+                  );
+                  setProductType("Apparel");
+                  setColor("Blue");
+                  setImageUrl("");
+                  setListingAttrs(apparelListingDefaults());
+                }}
+              >
+                Prefill Blue apparel
+              </s-button>
+              <s-button
+                type="button"
+                onClick={() => {
                   setTitle("Green Plastic Water Bottle");
                   setDescription(
                     "Insulated bottle. Listed as Green — attach a blue bottle photo to test color mismatch.",
@@ -1344,6 +1611,7 @@ export default function Index() {
                   setProductType("Bottle");
                   setColor("Green");
                   setImageUrl("");
+                  setListingAttrs(bottleListingDefaults());
                 }}
               >
                 Prefill Green bottle
@@ -1358,6 +1626,7 @@ export default function Index() {
                   setProductType("Handbag");
                   setColor("Brown");
                   setImageUrl("");
+                  setListingAttrs(handbagListingDefaults());
                 }}
               >
                 Prefill Brown handbag
@@ -1370,7 +1639,11 @@ export default function Index() {
           <s-banner tone="success" heading="Test product created">
             <s-paragraph>
               {created.title} · Color={created.color} · Type=
-              {created.productType || "—"}. {created.note}
+              {created.productType || "—"}.
+              {"claims" in created && created.claims
+                ? ` ${created.claims}.`
+                : ""}{" "}
+              {created.note}
               {created.mediaWarning
                 ? ` Media note: ${created.mediaWarning}`
                 : ""}

@@ -8,11 +8,21 @@ export const VisionResponseSchema = z.object({
   productTypeConfidence: z.number().min(0).max(1),
   material: z.string().optional(),
   materialConfidence: z.number().min(0).max(1).optional(),
-  /** EXPERIMENTAL — only requested when experimental pack enabled */
+  /** EXPERIMENTAL — only when experimental pack enabled */
   pattern: z.string().optional(),
   patternConfidence: z.number().min(0).max(1).optional(),
   finish: z.string().optional(),
   finishConfidence: z.number().min(0).max(1).optional(),
+  sleeveType: z.string().optional(),
+  sleeveTypeConfidence: z.number().min(0).max(1).optional(),
+  neckline: z.string().optional(),
+  necklineConfidence: z.number().min(0).max(1).optional(),
+  closureType: z.string().optional(),
+  closureTypeConfidence: z.number().min(0).max(1).optional(),
+  shoeStyle: z.string().optional(),
+  shoeStyleConfidence: z.number().min(0).max(1).optional(),
+  strapType: z.string().optional(),
+  strapTypeConfidence: z.number().min(0).max(1).optional(),
   imageQuality: z.enum(["good", "fair", "poor"]),
   reasoning: z.string(),
 });
@@ -23,10 +33,14 @@ export interface ListingFacts {
   productTitle: string;
   productType: string | null;
   claimedMaterial: string | null;
-  /** Where claimedMaterial came from */
   materialSource?: "metafield" | "title" | null;
   claimedPattern?: string | null;
   claimedFinish?: string | null;
+  claimedSleeveType?: string | null;
+  claimedNeckline?: string | null;
+  claimedClosureType?: string | null;
+  claimedShoeStyle?: string | null;
+  claimedStrapType?: string | null;
 }
 
 export interface VisualFacts {
@@ -41,6 +55,16 @@ export interface VisualFacts {
   visionPatternConfidence?: number | null;
   visionFinish?: string | null;
   visionFinishConfidence?: number | null;
+  visionSleeveType?: string | null;
+  visionSleeveTypeConfidence?: number | null;
+  visionNeckline?: string | null;
+  visionNecklineConfidence?: number | null;
+  visionClosureType?: string | null;
+  visionClosureTypeConfidence?: number | null;
+  visionShoeStyle?: string | null;
+  visionShoeStyleConfidence?: number | null;
+  visionStrapType?: string | null;
+  visionStrapTypeConfidence?: number | null;
   imageQuality: "good" | "fair" | "poor";
   pixelColor?: string;
   pixelHex?: string;
@@ -59,7 +83,12 @@ export type SignalKey =
   | "productType"
   | "material"
   | "pattern"
-  | "finish";
+  | "finish"
+  | "sleeveType"
+  | "neckline"
+  | "closureType"
+  | "shoeStyle"
+  | "strapType";
 
 export interface SignalResult {
   signal: SignalKey;
@@ -75,7 +104,6 @@ export interface ConsistencyIssue {
   claimed: string | null;
   detected: string;
   confidence: number;
-  /** Issues that affect health are only MISMATCH or UNCERTAIN */
   verdict: "MISMATCH" | "UNCERTAIN";
   evidence: string;
 }
@@ -85,7 +113,12 @@ export type FixableSignal =
   | "productType"
   | "material"
   | "pattern"
-  | "finish";
+  | "finish"
+  | "sleeveType"
+  | "neckline"
+  | "closureType"
+  | "shoeStyle"
+  | "strapType";
 
 export const FixableSignalSchema = z.enum([
   "color",
@@ -93,6 +126,11 @@ export const FixableSignalSchema = z.enum([
   "material",
   "pattern",
   "finish",
+  "sleeveType",
+  "neckline",
+  "closureType",
+  "shoeStyle",
+  "strapType",
 ]);
 
 export const SuggestedFixSchema = z.object({
@@ -111,7 +149,6 @@ export interface SuggestedFix {
   currentValue: string;
   suggestedValue: string;
   productId: string;
-  /** Required for color fixes (Shopify option value mutation) */
   optionId?: string;
   optionValueId?: string;
 }
@@ -126,9 +163,7 @@ export interface AnalysisResult {
   imageQualityNote: string | null;
   visionReasoning: string;
   imageUrl: string;
-  /** Color, product-type, and/or material fixes the merchant can confirm one at a time. */
   suggestedFixes: SuggestedFix[];
-  /** full = vision ran; cached-recheck = listing-only compare reused vision */
   analysisSource?: "full" | "cached-recheck";
 }
 

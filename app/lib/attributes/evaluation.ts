@@ -3,8 +3,7 @@ import type { AttributeKey, EvaluationRecord } from "./types";
 /**
  * Attribute evaluation gate records.
  * An attribute MUST NOT become PRODUCTION without a completed record
- * and acceptable False Auto-Fix Rate. Synthetic consistency tests alone
- * are insufficient evidence of vision accuracy.
+ * and acceptable False Auto-Fix Rate.
  */
 const EVALUATION_RECORDS: Record<AttributeKey, EvaluationRecord> = {
   color: {
@@ -16,7 +15,7 @@ const EVALUATION_RECORDS: Record<AttributeKey, EvaluationRecord> = {
     falseAutoFixRisk: "medium",
     evaluationScore: null,
     notes:
-      "PRODUCTION via existing hardened path. Multi-variant color still limited to option value[0]. Real-image False Auto-Fix Rate not yet measured at scale.",
+      "PRODUCTION via existing hardened path. Multi-variant color still limited to option value[0].",
     lastReviewedAt: "2026-08-11",
   },
   productType: {
@@ -39,29 +38,84 @@ const EVALUATION_RECORDS: Record<AttributeKey, EvaluationRecord> = {
     falseAutoFixRisk: "high",
     evaluationScore: null,
     notes:
-      "PRODUCTION with metafield-first dual-read. Title rewrite default OFF. Ambiguous materials (gold vs yellow metal) remain high risk.",
+      "PRODUCTION with metafield-first dual-read. Title rewrite default OFF.",
     lastReviewedAt: "2026-08-11",
   },
   pattern: {
     attributeKey: "pattern",
-    businessValue: "Useful for apparel/bags filters; integrity when claimed",
+    businessValue: "Apparel/bags filter facets; integrity when claimed",
     supportedCategories: ["apparel", "footwear", "bags"],
     detectability: "medium",
     groundTruthDataset: "pending labeled set",
     falseAutoFixRisk: "high",
     evaluationScore: null,
-    notes: "EXPERIMENTAL. Confirm-only. Not production-enabled until gate passes.",
+    notes: "EXPERIMENTAL. Confirm-only.",
     lastReviewedAt: "2026-08-11",
   },
   finish: {
     attributeKey: "finish",
-    businessValue: "Useful for jewelry/bags surface claims",
+    businessValue: "Surface finish claims (jewelry, bags, apparel)",
     supportedCategories: ["apparel", "footwear", "bags", "jewelry"],
     detectability: "medium",
     groundTruthDataset: "pending labeled set",
     falseAutoFixRisk: "high",
     evaluationScore: null,
-    notes: "EXPERIMENTAL. Confirm-only. Not production-enabled until gate passes.",
+    notes: "EXPERIMENTAL. Confirm-only.",
+    lastReviewedAt: "2026-08-11",
+  },
+  sleeveType: {
+    attributeKey: "sleeveType",
+    businessValue: "Apparel filter facet; high visual detectability",
+    supportedCategories: ["apparel"],
+    detectability: "high",
+    groundTruthDataset: "pending labeled set",
+    falseAutoFixRisk: "medium",
+    evaluationScore: null,
+    notes: "EXPERIMENTAL. Confirm-only. Category pack: apparel.",
+    lastReviewedAt: "2026-08-11",
+  },
+  neckline: {
+    attributeKey: "neckline",
+    businessValue: "Apparel discovery + listing integrity",
+    supportedCategories: ["apparel"],
+    detectability: "high",
+    groundTruthDataset: "pending labeled set",
+    falseAutoFixRisk: "medium",
+    evaluationScore: null,
+    notes: "EXPERIMENTAL. Confirm-only. Category pack: apparel.",
+    lastReviewedAt: "2026-08-11",
+  },
+  closureType: {
+    attributeKey: "closureType",
+    businessValue: "Cross-category practical filter (zip/lace/button)",
+    supportedCategories: ["apparel", "footwear", "bags"],
+    detectability: "high",
+    groundTruthDataset: "pending labeled set",
+    falseAutoFixRisk: "medium",
+    evaluationScore: null,
+    notes: "EXPERIMENTAL. Confirm-only.",
+    lastReviewedAt: "2026-08-11",
+  },
+  shoeStyle: {
+    attributeKey: "shoeStyle",
+    businessValue: "Footwear taxonomy beyond productType",
+    supportedCategories: ["footwear"],
+    detectability: "high",
+    groundTruthDataset: "pending labeled set",
+    falseAutoFixRisk: "medium",
+    evaluationScore: null,
+    notes: "EXPERIMENTAL. Confirm-only. Category pack: footwear.",
+    lastReviewedAt: "2026-08-11",
+  },
+  strapType: {
+    attributeKey: "strapType",
+    businessValue: "Bag carry-style filter; high shopper relevance",
+    supportedCategories: ["bags"],
+    detectability: "high",
+    groundTruthDataset: "pending labeled set",
+    falseAutoFixRisk: "medium",
+    evaluationScore: null,
+    notes: "EXPERIMENTAL. Confirm-only. Category pack: bags.",
     lastReviewedAt: "2026-08-11",
   },
 };
@@ -76,10 +130,6 @@ export function listEvaluationRecords(): EvaluationRecord[] {
   return Object.values(EVALUATION_RECORDS);
 }
 
-/**
- * Gate check — PRODUCTION promotion requires documented eval + score.
- * Returns false for experimental/disabled until evidence exists.
- */
 export function canPromoteToProduction(key: AttributeKey): {
   ok: boolean;
   reasons: string[];

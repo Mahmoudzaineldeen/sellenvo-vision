@@ -33,11 +33,17 @@ import { logEvent } from "../lib/logger.server";
 import type {
   AnalysisResult,
   FixableSignal,
+  ListingFacts,
   SuggestedFix,
 } from "../lib/types";
 import { SuggestedFixesArraySchema } from "../lib/types";
 import { extractMaterialFromTitle } from "../lib/consistency.server";
 import { FixModal, useFixModal } from "../components/FixModal";
+import {
+  EXPERIMENTAL_METAFIELD_KEYS,
+  getAttribute,
+  type AttributeKey,
+} from "../lib/attributes";
 
 /** Presentation-only swatches for color signal rows (not business logic). */
 const COLOR_SWATCHES: Record<string, string> = {
@@ -63,18 +69,38 @@ const COLOR_SWATCHES: Record<string, string> = {
 
 function signalLabel(signal: string): string {
   if (signal === "productType") return "Product Type";
-  if (signal === "material") return "Material";
-  if (signal === "pattern") return "Pattern";
-  if (signal === "finish") return "Finish";
-  return "Color";
+  if (signal === "color") return "Color";
+  return getAttribute(signal as AttributeKey)?.label ?? signal;
 }
 
 function fixFieldLabel(field: FixableSignal): string {
   if (field === "productType") return "Product type";
-  if (field === "material") return "Material";
-  if (field === "pattern") return "Pattern";
-  if (field === "finish") return "Finish";
-  return "Color";
+  if (field === "color") return "Color";
+  return getAttribute(field)?.label ?? field;
+}
+
+const ALLOWED_FIX_FIELDS: FixableSignal[] = [
+  "color",
+  "productType",
+  "material",
+  ...EXPERIMENTAL_METAFIELD_KEYS,
+];
+
+function claimedValueForField(
+  field: FixableSignal,
+  listing: ListingFacts,
+): string | null {
+  if (field === "color") return listing.claimedColor;
+  if (field === "productType") return listing.productType;
+  if (field === "material") return listing.claimedMaterial;
+  if (field === "pattern") return listing.claimedPattern ?? null;
+  if (field === "finish") return listing.claimedFinish ?? null;
+  if (field === "sleeveType") return listing.claimedSleeveType ?? null;
+  if (field === "neckline") return listing.claimedNeckline ?? null;
+  if (field === "closureType") return listing.claimedClosureType ?? null;
+  if (field === "shoeStyle") return listing.claimedShoeStyle ?? null;
+  if (field === "strapType") return listing.claimedStrapType ?? null;
+  return null;
 }
 
 function verdictTone(
@@ -385,13 +411,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         if (!newValue) {
           return { error: "Missing fix parameters", requestId };
         }
-        const allowedFields: FixableSignal[] = [
-          "color",
-          "productType",
-          "material",
-          "pattern",
-          "finish",
-        ];
+        const allowedFields: FixableSignal[] = ALLOWED_FIX_FIELDS;
         if (!allowedFields.includes(field)) {
           return { error: `Unsupported fix field: ${field}`, requestId };
         }
@@ -639,13 +659,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   if (intent === "revert") {
     const field = String(formData.get("field") || "") as FixableSignal;
     const force = String(formData.get("force") || "") === "1";
-    const allowedFields: FixableSignal[] = [
-      "color",
-      "productType",
-      "material",
-      "pattern",
-      "finish",
-    ];
+    const allowedFields: FixableSignal[] = ALLOWED_FIX_FIELDS;
     if (!allowedFields.includes(field)) {
       return { error: `Unsupported revert field: ${field}`, requestId };
     }
@@ -680,16 +694,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const { extractListingFacts } = await import("../lib/consistency.server");
     const listing = extractListingFacts(product, meta);
 
-    const currentValue =
-      field === "color"
-        ? listing.claimedColor
-        : field === "productType"
-          ? listing.productType
-          : field === "material"
-            ? listing.claimedMaterial
-            : field === "pattern"
-              ? listing.claimedPattern
-              : listing.claimedFinish;
+    const currentValue = claimedValueForField(field, listing);
 
     const matchesAudited =
       (currentValue || "").toLowerCase().trim() ===
@@ -1516,7 +1521,9 @@ function GuardianContent({
                                     ? "Uncertain"
                                     : sr.verdict === "NOT_DETECTABLE"
                                       ? "Not detectable"
-                                      : sr.verdict}
+                                      : sr.verdict === "NOT_APPLICABLE"
+                                        ? "Not applicable"
+                                        : sr.verdict}
                             </s-badge>
                             <s-badge>
                               {sr.confidence !== null

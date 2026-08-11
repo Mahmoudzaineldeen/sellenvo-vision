@@ -25,6 +25,39 @@ import {
   getLatestAnalysisForProduct,
   persistAnalysis,
 } from "./analysis-persist.server";
+import { resolveCategoryPack } from "./attributes";
+import type { ProductMetafields } from "./metafields.server";
+
+function hasExperimentalMetafieldClaims(
+  metafields: ProductMetafields | null | undefined,
+): boolean {
+  if (!metafields) return false;
+  return Boolean(
+    metafields.pattern?.trim() ||
+      metafields.finish?.trim() ||
+      metafields.sleeveType?.trim() ||
+      metafields.neckline?.trim() ||
+      metafields.closureType?.trim() ||
+      metafields.shoeStyle?.trim() ||
+      metafields.strapType?.trim(),
+  );
+}
+
+/** Enable experimental vision+signals for category packs or when claims exist. */
+function shouldEnableExperimental(args: {
+  forced?: boolean;
+  settingsEnabled?: boolean;
+  productType?: string | null;
+  metafields?: ProductMetafields | null;
+}): boolean {
+  if (args.forced) return true;
+  if (args.settingsEnabled) return true;
+  if (hasExperimentalMetafieldClaims(args.metafields)) return true;
+  if (args.productType && resolveCategoryPack(args.productType) !== "core") {
+    return true;
+  }
+  return false;
+}
 
 export type AnalysisTimings = {
   productFetchMs: number;
@@ -50,6 +83,8 @@ export type PipelineContext = {
   shop?: string;
   includeExperimental?: boolean;
   requireEnsembleAgreement?: boolean;
+  /** Listing product type for vision attribute packs. */
+  productType?: string | null;
 };
 
 function getImageUrl(product: ProductNode): string | null {
@@ -139,6 +174,7 @@ async function buildVisualFacts(
   const visionOpts = {
     includeExperimental: opts?.includeExperimental,
     requireEnsembleAgreement: opts?.requireEnsembleAgreement,
+    productType: opts?.productType,
   };
 
   const visionImageUrl = toVisionOptimizedImageUrl(imageUrl);
@@ -230,6 +266,16 @@ async function buildVisualFacts(
     visionPatternConfidence: vision.patternConfidence ?? null,
     visionFinish: vision.finish ?? null,
     visionFinishConfidence: vision.finishConfidence ?? null,
+    visionSleeveType: vision.sleeveType ?? null,
+    visionSleeveTypeConfidence: vision.sleeveTypeConfidence ?? null,
+    visionNeckline: vision.neckline ?? null,
+    visionNecklineConfidence: vision.necklineConfidence ?? null,
+    visionClosureType: vision.closureType ?? null,
+    visionClosureTypeConfidence: vision.closureTypeConfidence ?? null,
+    visionShoeStyle: vision.shoeStyle ?? null,
+    visionShoeStyleConfidence: vision.shoeStyleConfidence ?? null,
+    visionStrapType: vision.strapType ?? null,
+    visionStrapTypeConfidence: vision.strapTypeConfidence ?? null,
     imageQuality: vision.imageQuality,
     pixelColor,
     pixelHex,
@@ -255,6 +301,11 @@ async function runConsistency(
       material: null as string | null,
       pattern: null as string | null,
       finish: null as string | null,
+      sleeveType: null as string | null,
+      neckline: null as string | null,
+      closureType: null as string | null,
+      shoeStyle: null as string | null,
+      strapType: null as string | null,
     })),
     opts?.shop
       ? getShopSettings(opts.shop).catch(() => null)
@@ -263,11 +314,14 @@ async function runConsistency(
 
   const metafields = metafieldsResult;
   let materialWriteMode: "metafield" | "title" | "both" = "metafield";
-  let includeExperimental = opts?.includeExperimental === true;
+  let includeExperimental = shouldEnableExperimental({
+    forced: opts?.includeExperimental === true,
+    settingsEnabled: settingsResult?.showExperimentalAttributes === true,
+    productType: product.productType,
+    metafields,
+  });
   if (settingsResult) {
     materialWriteMode = settingsResult.materialWriteMode;
-    includeExperimental =
-      includeExperimental || settingsResult.showExperimentalAttributes;
   }
 
   const listing = extractListingFacts(product, metafields);
@@ -309,7 +363,42 @@ export async function runFullAnalysis(
       };
     }
 
-    const { visual, visionMs, pixelMs } = await buildVisualFacts(imageUrl, ctx);
+    // Resolve experimental flag before vision so the prompt requests pack attrs.
+    let visionCtx: PipelineContext = {
+      ...ctx,
+      productType: product.productType ?? ctx?.productType ?? null,
+    };
+    if (ctx?.includeExperimental !== true) {
+      let settingsEnabled = false;
+      let metafields: ProductMetafields | null = null;
+      if (ctx?.shop) {
+        try {
+          const settings = await getShopSettings(ctx.shop);
+          settingsEnabled = settings.showExperimentalAttributes;
+        } catch {
+          /* ignore */
+        }
+      }
+      try {
+        metafields = await fetchProductSellenvoMetafields(admin, product.id);
+      } catch {
+        metafields = null;
+      }
+      if (
+        shouldEnableExperimental({
+          settingsEnabled,
+          productType: product.productType,
+          metafields,
+        })
+      ) {
+        visionCtx = { ...visionCtx, includeExperimental: true };
+      }
+    }
+
+    const { visual, visionMs, pixelMs } = await buildVisualFacts(
+      imageUrl,
+      visionCtx,
+    );
     setCachedVisual(product.id, imageUrl, visual);
 
     const { analysis, consistencyMs, listing } = await runConsistency(
@@ -317,7 +406,7 @@ export async function runFullAnalysis(
       product,
       visual,
       imageUrl,
-      ctx,
+      visionCtx,
     );
     analysis.analysisSource = "full";
 

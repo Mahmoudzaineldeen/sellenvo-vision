@@ -40,6 +40,7 @@ export class GroqVisionProvider implements VisionProvider {
       includeExperimental: input.includeExperimental,
       requireEnsembleAgreement: input.requireEnsembleAgreement,
       imageUrl: input.imageUrl,
+      productType: input.productType,
     };
 
     try {

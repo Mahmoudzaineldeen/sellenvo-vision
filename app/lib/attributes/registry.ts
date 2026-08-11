@@ -3,20 +3,47 @@ import type {
   AttributeKey,
   AttributeStatus,
 } from "./types";
-import { colorsMatch, normalizeColorName } from "../color-normalize.server";
+import { colorsMatch, normalizeColorName } from "../color-normalize";
 import {
   normalizeProductType,
   productTypesMatch,
-} from "../product-type-normalize.server";
+} from "../product-type-normalize";
 import { materialsMatch, normalizeMaterialName } from "../materials";
 import {
   normalizePatternName,
   patternsMatch,
+  isRecognizedPattern,
 } from "./normalize/pattern";
 import {
   normalizeFinishName,
   finishesMatch,
+  isRecognizedFinish,
 } from "./normalize/finish";
+import {
+  normalizeSleeveTypeName,
+  sleeveTypesMatch,
+  isRecognizedSleeveType,
+} from "./normalize/sleeve-type";
+import {
+  normalizeNecklineName,
+  necklinesMatch,
+  isRecognizedNeckline,
+} from "./normalize/neckline";
+import {
+  normalizeClosureTypeName,
+  closureTypesMatch,
+  isRecognizedClosureType,
+} from "./normalize/closure-type";
+import {
+  normalizeShoeStyleName,
+  shoeStylesMatch,
+  isRecognizedShoeStyle,
+} from "./normalize/shoe-style";
+import {
+  normalizeStrapTypeName,
+  strapTypesMatch,
+  isRecognizedStrapType,
+} from "./normalize/strap-type";
 
 const COLOR_DEF: AttributeDefinition = {
   key: "color",
@@ -25,8 +52,6 @@ const COLOR_DEF: AttributeDefinition = {
   applicableCategories: ["*"],
   detectability: "high",
   confidenceThreshold: 0.7,
-  // "safe" = eligible for auto-apply ONLY when shop.safeAutoFixEnabled is on.
-  // When the shop setting is off, FixPolicyEngine still requires confirmation.
   fixPolicy: "safe",
   storage: { kind: "option_color" },
   normalize: normalizeColorName,
@@ -78,6 +103,7 @@ const PATTERN_DEF: AttributeDefinition = {
   },
   normalize: normalizePatternName,
   match: patternsMatch,
+  isRecognized: isRecognizedPattern,
 };
 
 const FINISH_DEF: AttributeDefinition = {
@@ -95,6 +121,97 @@ const FINISH_DEF: AttributeDefinition = {
   },
   normalize: normalizeFinishName,
   match: finishesMatch,
+  isRecognized: isRecognizedFinish,
+};
+
+const SLEEVE_TYPE_DEF: AttributeDefinition = {
+  key: "sleeveType",
+  label: "Sleeve type",
+  status: "EXPERIMENTAL",
+  applicableCategories: ["apparel"],
+  detectability: "high",
+  confidenceThreshold: 0.75,
+  fixPolicy: "confirm",
+  storage: {
+    kind: "metafield",
+    namespace: "sellenvo",
+    key: "sleeveType",
+  },
+  normalize: normalizeSleeveTypeName,
+  match: sleeveTypesMatch,
+  isRecognized: isRecognizedSleeveType,
+};
+
+const NECKLINE_DEF: AttributeDefinition = {
+  key: "neckline",
+  label: "Neckline",
+  status: "EXPERIMENTAL",
+  applicableCategories: ["apparel"],
+  detectability: "high",
+  confidenceThreshold: 0.75,
+  fixPolicy: "confirm",
+  storage: {
+    kind: "metafield",
+    namespace: "sellenvo",
+    key: "neckline",
+  },
+  normalize: normalizeNecklineName,
+  match: necklinesMatch,
+  isRecognized: isRecognizedNeckline,
+};
+
+const CLOSURE_TYPE_DEF: AttributeDefinition = {
+  key: "closureType",
+  label: "Closure type",
+  status: "EXPERIMENTAL",
+  applicableCategories: ["apparel", "footwear", "bags"],
+  detectability: "high",
+  confidenceThreshold: 0.75,
+  fixPolicy: "confirm",
+  storage: {
+    kind: "metafield",
+    namespace: "sellenvo",
+    key: "closureType",
+  },
+  normalize: normalizeClosureTypeName,
+  match: closureTypesMatch,
+  isRecognized: isRecognizedClosureType,
+};
+
+const SHOE_STYLE_DEF: AttributeDefinition = {
+  key: "shoeStyle",
+  label: "Shoe style",
+  status: "EXPERIMENTAL",
+  applicableCategories: ["footwear"],
+  detectability: "high",
+  confidenceThreshold: 0.75,
+  fixPolicy: "confirm",
+  storage: {
+    kind: "metafield",
+    namespace: "sellenvo",
+    key: "shoeStyle",
+  },
+  normalize: normalizeShoeStyleName,
+  match: shoeStylesMatch,
+  isRecognized: isRecognizedShoeStyle,
+};
+
+const STRAP_TYPE_DEF: AttributeDefinition = {
+  key: "strapType",
+  label: "Strap type",
+  status: "EXPERIMENTAL",
+  applicableCategories: ["bags"],
+  detectability: "high",
+  confidenceThreshold: 0.75,
+  fixPolicy: "confirm",
+  storage: {
+    kind: "metafield",
+    namespace: "sellenvo",
+    key: "strapType",
+  },
+  normalize: normalizeStrapTypeName,
+  match: strapTypesMatch,
+  isRecognized: isRecognizedStrapType,
 };
 
 /** Registry — single source of truth. Do not add attribute branches elsewhere. */
@@ -104,7 +221,23 @@ const REGISTRY: Record<AttributeKey, AttributeDefinition> = {
   material: MATERIAL_DEF,
   pattern: PATTERN_DEF,
   finish: FINISH_DEF,
+  sleeveType: SLEEVE_TYPE_DEF,
+  neckline: NECKLINE_DEF,
+  closureType: CLOSURE_TYPE_DEF,
+  shoeStyle: SHOE_STYLE_DEF,
+  strapType: STRAP_TYPE_DEF,
 };
+
+/** Experimental metafield-backed attributes (confirm-only). */
+export const EXPERIMENTAL_METAFIELD_KEYS: AttributeKey[] = [
+  "pattern",
+  "finish",
+  "sleeveType",
+  "neckline",
+  "closureType",
+  "shoeStyle",
+  "strapType",
+];
 
 export function getAttribute(key: AttributeKey): AttributeDefinition | undefined {
   return REGISTRY[key];

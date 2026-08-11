@@ -76,6 +76,21 @@ function createMockAdmin(state: MockState): AdminClient {
               finish: state.metafields.finish
                 ? { value: state.metafields.finish }
                 : null,
+              sleeveType: state.metafields.sleeveType
+                ? { value: state.metafields.sleeveType }
+                : null,
+              neckline: state.metafields.neckline
+                ? { value: state.metafields.neckline }
+                : null,
+              closureType: state.metafields.closureType
+                ? { value: state.metafields.closureType }
+                : null,
+              shoeStyle: state.metafields.shoeStyle
+                ? { value: state.metafields.shoeStyle }
+                : null,
+              strapType: state.metafields.strapType
+                ? { value: state.metafields.strapType }
+                : null,
             },
           },
         });
@@ -259,6 +274,25 @@ console.log("\n=== Pattern metafield ===");
   );
   assert(outcomes.some((o) => o.field === "pattern" && o.success), "pattern success");
   assert(state.metafields.pattern === "Striped", "pattern metafield");
+}
+
+console.log("\n=== Sleeve type metafield ===");
+{
+  const state: MockState = {
+    title: "Tee",
+    productType: "Apparel",
+    color: "Blue",
+    metafields: {},
+  };
+  const admin = createMockAdmin(state);
+  const { outcomes } = await applyShopifyFixes(
+    admin,
+    "gid://shopify/Product/1",
+    [{ field: "sleeveType", newValue: "Short", currentValue: "Long" }],
+    { settings: confirmSettings, merchantConfirmed: true },
+  );
+  assert(outcomes.some((o) => o.field === "sleeveType" && o.success), "sleeveType success");
+  assert(state.metafields.sleeveType === "Short", "sleeveType metafield");
 }
 
 console.log("\n=== Policy blocks without confirmation ===");

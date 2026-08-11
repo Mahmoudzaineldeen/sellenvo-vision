@@ -101,7 +101,7 @@ export default function SettingsPage() {
                 name="showExperimentalAttributes"
                 defaultChecked={current.showExperimentalAttributes}
               />{" "}
-              Show experimental attributes (pattern, finish)
+              Show experimental attributes (pattern, finish, sleeve, neckline, closure, shoe style, strap)
             </label>
             <s-button type="submit" variant="primary">
               Save settings

@@ -15,7 +15,8 @@ const DEFAULTS: Omit<ShopSettingsRecord, "shop"> = {
   materialWriteMode: "metafield",
   autoScanOnCreate: true,
   safeAutoFixEnabled: false,
-  showExperimentalAttributes: false,
+  /** Pilot default ON so Guardian surfaces category attributes without a Settings trip. */
+  showExperimentalAttributes: true,
 };
 
 function normalizeMode(raw: string): MaterialWriteMode {

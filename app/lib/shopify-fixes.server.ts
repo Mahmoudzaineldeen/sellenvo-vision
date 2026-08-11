@@ -12,7 +12,7 @@ import {
   type SellenvoMetafieldKey,
   type ProductMetafields,
 } from "./metafields.server";
-import { evaluateFixPolicy, type ShopFixSettings } from "./attributes";
+import { evaluateFixPolicy, EXPERIMENTAL_METAFIELD_KEYS, type ShopFixSettings } from "./attributes";
 import type { MaterialWriteMode } from "./shop-settings.server";
 
 export type AdminClient = {
@@ -350,8 +350,12 @@ export async function applyShopifyFixes(
   const colorFix = allowedFixes.find((f) => f.field === "color");
   const typeFix = allowedFixes.find((f) => f.field === "productType");
   const materialFix = allowedFixes.find((f) => f.field === "material");
-  const patternFix = allowedFixes.find((f) => f.field === "pattern");
-  const finishFix = allowedFixes.find((f) => f.field === "finish");
+  const experimentalFixes = EXPERIMENTAL_METAFIELD_KEYS.map((key) =>
+    allowedFixes.find((f) => f.field === key),
+  ).filter((f): f is FixRequest => Boolean(f));
+  const experimentalByField = new Map(
+    experimentalFixes.map((f) => [f.field, f] as const),
+  );
 
   let current: ProductNode | null = null;
   if (materialFix || typeFix) {
@@ -422,7 +426,7 @@ export async function applyShopifyFixes(
     }
   }
 
-  if (patternFix || finishFix) {
+  if (experimentalFixes.length > 0) {
     await ensureSellenvoMetafieldDefinitions(admin);
   }
 
@@ -515,7 +519,7 @@ export async function applyShopifyFixes(
       }
     }
 
-    // Metafield writes (material / pattern / finish)
+    // Metafield writes (material + experimental attrs)
     const metafieldWrites: Array<{
       field: FixableSignal;
       key: SellenvoMetafieldKey;
@@ -546,18 +550,11 @@ export async function applyShopifyFixes(
         value: materialFix.newValue,
       });
     }
-    if (patternFix) {
+    for (const fix of experimentalFixes) {
       metafieldWrites.push({
-        field: "pattern",
-        key: "pattern",
-        value: patternFix.newValue,
-      });
-    }
-    if (finishFix) {
-      metafieldWrites.push({
-        field: "finish",
-        key: "finish",
-        value: finishFix.newValue,
+        field: fix.field,
+        key: fix.field as SellenvoMetafieldKey,
+        value: fix.newValue,
       });
     }
 
@@ -598,7 +595,7 @@ export async function applyShopifyFixes(
 
   const verifyStarted = Date.now();
   // Parallelize product refetch + metafield verify when needed
-  const needsMeta = Boolean(materialFix || patternFix || finishFix);
+  const needsMeta = Boolean(materialFix || experimentalFixes.length > 0);
   const [verified, metaVerified] = await Promise.all([
     fetchProductNode(admin, productId),
     needsMeta
@@ -664,24 +661,16 @@ export async function applyShopifyFixes(
           ? undefined
           : `Verification failed. Shopify shows: ${value ?? "unknown"}`,
       });
-    } else if (outcome.field === "pattern") {
-      const value = metaVerified?.pattern ?? null;
+    } else if (experimentalByField.has(outcome.field)) {
+      const expectedFix = experimentalByField.get(outcome.field);
+      const value =
+        (metaVerified?.[
+          outcome.field as keyof ProductMetafields
+        ] as string | null | undefined) ?? null;
       const success =
-        value?.toLowerCase() === (patternFix?.newValue ?? "").toLowerCase();
+        value?.toLowerCase() === (expectedFix?.newValue ?? "").toLowerCase();
       outcomes.push({
-        field: "pattern",
-        success,
-        verifiedValue: value,
-        error: success
-          ? undefined
-          : `Verification failed. Shopify shows: ${value ?? "unknown"}`,
-      });
-    } else if (outcome.field === "finish") {
-      const value = metaVerified?.finish ?? null;
-      const success =
-        value?.toLowerCase() === (finishFix?.newValue ?? "").toLowerCase();
-      outcomes.push({
-        field: "finish",
+        field: outcome.field,
         success,
         verifiedValue: value,
         error: success

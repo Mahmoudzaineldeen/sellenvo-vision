@@ -1,15 +1,24 @@
 /**
  * Idempotent Sellenvo metafield definitions + product metafield read/write.
- * Namespace: sellenvo — keys: material, pattern, finish
+ * Namespace: sellenvo
  */
 
 import type { AdminClient } from "./shopify-fixes.server";
+import { EXPERIMENTAL_METAFIELD_KEYS, getAttribute } from "./attributes";
 
 export const SELLENVO_NAMESPACE = "sellenvo";
 
-export type SellenvoMetafieldKey = "material" | "pattern" | "finish";
+export type SellenvoMetafieldKey =
+  | "material"
+  | "pattern"
+  | "finish"
+  | "sleeveType"
+  | "neckline"
+  | "closureType"
+  | "shoeStyle"
+  | "strapType";
 
-const DEFINITIONS: Array<{
+const CORE_DEFINITIONS: Array<{
   key: SellenvoMetafieldKey;
   name: string;
   description: string;
@@ -19,17 +28,20 @@ const DEFINITIONS: Array<{
     name: "Material",
     description: "Product material verified by Sellenvo Vision",
   },
-  {
-    key: "pattern",
-    name: "Pattern",
-    description: "Product pattern (experimental)",
-  },
-  {
-    key: "finish",
-    name: "Finish",
-    description: "Product surface finish (experimental)",
-  },
 ];
+
+function experimentalDefinitions() {
+  return EXPERIMENTAL_METAFIELD_KEYS.map((key) => {
+    const def = getAttribute(key);
+    return {
+      key: key as SellenvoMetafieldKey,
+      name: def?.label ?? key,
+      description: `${def?.label ?? key} (experimental — Sellenvo Vision)`,
+    };
+  });
+}
+
+const DEFINITIONS = [...CORE_DEFINITIONS, ...experimentalDefinitions()];
 
 function graphqlErrorMessage(json: unknown): string | null {
   if (!json || typeof json !== "object") return null;
@@ -41,9 +53,6 @@ function graphqlErrorMessage(json: unknown): string | null {
     .join("; ");
 }
 
-/**
- * Ensure metafield definitions exist (idempotent). Safe to call repeatedly.
- */
 export async function ensureSellenvoMetafieldDefinitions(
   admin: AdminClient,
 ): Promise<{ ok: boolean; error?: string }> {
@@ -75,7 +84,6 @@ export async function ensureSellenvoMetafieldDefinitions(
     const payload = json?.data?.metafieldDefinitionCreate;
     const userErrors: Array<{ message?: string; code?: string }> =
       payload?.userErrors ?? [];
-    // TAKEN / already exists is success for idempotency
     const blocking = userErrors.filter(
       (e) =>
         e.code !== "TAKEN" &&
@@ -96,11 +104,13 @@ export type ProductMetafields = {
   material: string | null;
   pattern: string | null;
   finish: string | null;
+  sleeveType: string | null;
+  neckline: string | null;
+  closureType: string | null;
+  shoeStyle: string | null;
+  strapType: string | null;
 };
 
-/**
- * Read sellenvo.* metafields from a product.
- */
 export async function fetchProductSellenvoMetafields(
   admin: AdminClient,
   productId: string,
@@ -112,6 +122,11 @@ export async function fetchProductSellenvoMetafields(
         material: metafield(namespace: "sellenvo", key: "material") { value }
         pattern: metafield(namespace: "sellenvo", key: "pattern") { value }
         finish: metafield(namespace: "sellenvo", key: "finish") { value }
+        sleeveType: metafield(namespace: "sellenvo", key: "sleeveType") { value }
+        neckline: metafield(namespace: "sellenvo", key: "neckline") { value }
+        closureType: metafield(namespace: "sellenvo", key: "closureType") { value }
+        shoeStyle: metafield(namespace: "sellenvo", key: "shoeStyle") { value }
+        strapType: metafield(namespace: "sellenvo", key: "strapType") { value }
       }
     }`,
     { variables: { id: productId } },
@@ -122,12 +137,14 @@ export async function fetchProductSellenvoMetafields(
     material: product?.material?.value ?? null,
     pattern: product?.pattern?.value ?? null,
     finish: product?.finish?.value ?? null,
+    sleeveType: product?.sleeveType?.value ?? null,
+    neckline: product?.neckline?.value ?? null,
+    closureType: product?.closureType?.value ?? null,
+    shoeStyle: product?.shoeStyle?.value ?? null,
+    strapType: product?.strapType?.value ?? null,
   };
 }
 
-/**
- * Upsert a single sellenvo metafield on a product.
- */
 export async function setProductSellenvoMetafield(
   admin: AdminClient,
   productId: string,

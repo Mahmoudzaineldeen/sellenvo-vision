@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Docs: README metrics refreshed from internal scorecard (n=20) + 10-attribute coverage
+- Experimental attributes (confirm-only, Settings-gated): sleeve type, neckline, closure type, shoe style, strap type — category packs + `sellenvo.*` metafields
+- Registry-driven experimental signal eval / metafield mutate+verify (pattern/finish + new attrs)
+- Groq multi-key round-robin (primary + fallback + `GROQ_API_KEYS`)
+- Create test product: listing attribute claims before AI
+
 - Perf/UX: Apply Fix uses targeted recheck (no vision/image download); never falls back to full analysis on mutation path
 - Perf: parallel metafields/settings, audit writes, Shopify verify, metafield upserts
 - Perf: Catalog Health SQL latest-per-product + pagination; persist-first parallel loader

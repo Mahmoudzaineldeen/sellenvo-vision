@@ -4,7 +4,6 @@ import { getAttribute, isAttributeApplicable } from "./registry";
 /**
  * Category-aware attribute packs.
  * Only request attributes that are enabled + applicable.
- * Future sleeve/neckline/heel/etc. start DISABLED in registry (not listed until defined).
  */
 export const CATEGORY_PACKS: Record<CategoryPackId, CategoryPack> = {
   core: {
@@ -15,17 +14,42 @@ export const CATEGORY_PACKS: Record<CategoryPackId, CategoryPack> = {
   apparel: {
     id: "apparel",
     label: "Fashion / Apparel",
-    attributeKeys: ["color", "productType", "material", "pattern", "finish"],
+    attributeKeys: [
+      "color",
+      "productType",
+      "material",
+      "pattern",
+      "finish",
+      "sleeveType",
+      "neckline",
+      "closureType",
+    ],
   },
   footwear: {
     id: "footwear",
     label: "Footwear",
-    attributeKeys: ["color", "productType", "material", "pattern", "finish"],
+    attributeKeys: [
+      "color",
+      "productType",
+      "material",
+      "pattern",
+      "finish",
+      "shoeStyle",
+      "closureType",
+    ],
   },
   bags: {
     id: "bags",
     label: "Bags",
-    attributeKeys: ["color", "productType", "material", "pattern", "finish"],
+    attributeKeys: [
+      "color",
+      "productType",
+      "material",
+      "pattern",
+      "finish",
+      "strapType",
+      "closureType",
+    ],
   },
   jewelry: {
     id: "jewelry",
@@ -37,15 +61,15 @@ export const CATEGORY_PACKS: Record<CategoryPackId, CategoryPack> = {
 const PRODUCT_TYPE_TO_PACK: Array<{ match: RegExp; pack: CategoryPackId }> = [
   {
     match:
-      /\b(shirt|sweatshirt|hoodie|sweater|jacket|coat|pants|jeans|shorts|skirt|dress|blouse|apparel|clothing)\b/i,
+      /\b(shirt|sweatshirt|hoodie|sweater|jacket|coat|pants|jeans|shorts|skirt|dress|blouse|apparel|clothing|tee|t-shirt)\b/i,
     pack: "apparel",
   },
   {
-    match: /\b(shoe|sneaker|boot|sandal|slipper|loafer|footwear)\b/i,
+    match: /\b(shoe|sneaker|boot|sandal|slipper|loafer|footwear|heel|pump)\b/i,
     pack: "footwear",
   },
   {
-    match: /\b(bag|handbag|purse|backpack|tote)\b/i,
+    match: /\b(bag|handbag|purse|backpack|tote|clutch|wallet)\b/i,
     pack: "bags",
   },
   {

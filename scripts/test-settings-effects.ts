@@ -191,8 +191,8 @@ console.log("\n=== Setting: DB persist round-trip ===");
     assert(defaults.autoScanOnCreate === true, "default autoScanOnCreate=true");
     assert(defaults.safeAutoFixEnabled === false, "default safeAutoFix=false");
     assert(
-      defaults.showExperimentalAttributes === false,
-      "default experimental=false",
+      defaults.showExperimentalAttributes === true,
+      "default experimental=true",
     );
 
     const saved = await upsertShopSettings(shop, {

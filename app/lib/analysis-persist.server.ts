@@ -17,6 +17,11 @@ export function listingFingerprint(listing: ListingFacts): string {
     materialSource: listing.materialSource ?? null,
     pattern: listing.claimedPattern ?? null,
     finish: listing.claimedFinish ?? null,
+    sleeveType: listing.claimedSleeveType ?? null,
+    neckline: listing.claimedNeckline ?? null,
+    closureType: listing.claimedClosureType ?? null,
+    shoeStyle: listing.claimedShoeStyle ?? null,
+    strapType: listing.claimedStrapType ?? null,
     title: listing.productTitle,
   });
   return createHash("sha256").update(raw).digest("hex").slice(0, 32);

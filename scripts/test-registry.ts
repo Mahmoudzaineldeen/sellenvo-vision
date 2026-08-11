@@ -17,6 +17,12 @@ import {
   patternsMatch,
   normalizeFinishName,
   finishesMatch,
+  normalizeSleeveTypeName,
+  sleeveTypesMatch,
+  normalizeNecklineName,
+  normalizeClosureTypeName,
+  normalizeShoeStyleName,
+  normalizeStrapTypeName,
   getEvaluationRecord,
 } from "../app/lib/attributes";
 import {
@@ -46,10 +52,15 @@ assert(getAttribute("color")?.status === "PRODUCTION", "color PRODUCTION");
 assert(getAttribute("material")?.status === "PRODUCTION", "material PRODUCTION");
 assert(getAttribute("pattern")?.status === "EXPERIMENTAL", "pattern EXPERIMENTAL");
 assert(getAttribute("finish")?.status === "EXPERIMENTAL", "finish EXPERIMENTAL");
+assert(getAttribute("sleeveType")?.status === "EXPERIMENTAL", "sleeveType EXPERIMENTAL");
+assert(getAttribute("neckline")?.status === "EXPERIMENTAL", "neckline EXPERIMENTAL");
+assert(getAttribute("closureType")?.status === "EXPERIMENTAL", "closureType EXPERIMENTAL");
+assert(getAttribute("shoeStyle")?.status === "EXPERIMENTAL", "shoeStyle EXPERIMENTAL");
+assert(getAttribute("strapType")?.status === "EXPERIMENTAL", "strapType EXPERIMENTAL");
 assert(listProductionAttributes().length === 3, "3 production attributes");
 assert(
-  listEnabledAttributes({ includeExperimental: true }).length === 5,
-  "5 enabled with experimental",
+  listEnabledAttributes({ includeExperimental: true }).length === 10,
+  "10 enabled with experimental",
 );
 assert(
   getAttribute("material")?.storage.kind === "metafield",
@@ -59,7 +70,9 @@ assert(
 console.log("\n=== Evaluation gate ===");
 assert(canPromoteToProduction("pattern").ok === false, "pattern cannot promote yet");
 assert(canPromoteToProduction("finish").ok === false, "finish cannot promote yet");
+assert(canPromoteToProduction("sleeveType").ok === false, "sleeveType cannot promote yet");
 assert(!!getEvaluationRecord("color"), "color has eval record");
+assert(!!getEvaluationRecord("strapType"), "strapType has eval record");
 
 console.log("\n=== Policy engine ===");
 {
@@ -102,6 +115,7 @@ console.log("\n=== Category packs ===");
 assert(resolveCategoryPack("Apparel") === "apparel", "apparel pack");
 assert(resolveCategoryPack("Shoe") === "footwear", "footwear pack");
 assert(resolveCategoryPack("Handbag") === "bags", "bags pack");
+assert(resolveCategoryPack("Wallet") === "bags", "wallet → bags pack");
 assert(resolveCategoryPack("Necklace") === "jewelry", "jewelry pack");
 assert(resolveCategoryPack(null) === "core", "core default");
 assert(
@@ -119,12 +133,39 @@ assert(
   }).includes("pattern"),
   "pattern included with experimental",
 );
+assert(
+  selectAttributeKeysForProduct({
+    productType: "Shirt",
+    includeExperimental: true,
+  }).includes("sleeveType"),
+  "sleeveType in apparel pack",
+);
+assert(
+  selectAttributeKeysForProduct({
+    productType: "Shoe",
+    includeExperimental: true,
+  }).includes("shoeStyle"),
+  "shoeStyle in footwear pack",
+);
+assert(
+  selectAttributeKeysForProduct({
+    productType: "Handbag",
+    includeExperimental: true,
+  }).includes("strapType"),
+  "strapType in bags pack",
+);
 
-console.log("\n=== Pattern / Finish normalize ===");
+console.log("\n=== Pattern / Finish / category normalize ===");
 assert(normalizePatternName("Stripes") === "striped", "stripe alias");
 assert(patternsMatch("solid", "plain") === true, "plain≈solid");
 assert(normalizeFinishName("shiny") === "glossy", "shiny→glossy");
 assert(finishesMatch("matte", "dull") === true, "dull≈matte");
+assert(normalizeSleeveTypeName("short sleeve") === "short", "sleeve alias");
+assert(sleeveTypesMatch("long", "long sleeve") === true, "sleeve match");
+assert(normalizeNecklineName("crew neck") === "crew", "neckline alias");
+assert(normalizeClosureTypeName("zip") === "zipper", "closure alias");
+assert(normalizeShoeStyleName("trainers") === "sneaker", "shoe style alias");
+assert(normalizeStrapTypeName("cross-body") === "crossbody", "strap alias");
 
 console.log("\n=== Material dual-read ===");
 {
@@ -212,6 +253,58 @@ console.log("\n=== Metafield-first material fix suggestion ===");
   assert(
     analysis.suggestedFixes.some((f) => f.field === "material"),
     "material fix suggested in metafield mode",
+  );
+}
+
+console.log("\n=== Experimental: claimed only; skipped stay hidden ===");
+{
+  const analysis = buildAnalysisResultV2({
+    listing: {
+      claimedColor: "Blue",
+      productTitle: "Blue Cotton Shirt",
+      productType: "Apparel",
+      claimedMaterial: "cotton",
+      claimedSleeveType: "Short",
+    },
+    visual: {
+      visionColor: "gold",
+      visionConfidence: 0.95,
+      visionReasoning: "necklace",
+      visionProductType: "necklace",
+      visionProductTypeConfidence: 0.95,
+      visionMaterial: "metal",
+      visionMaterialConfidence: 0.95,
+      visionFinish: "metallic",
+      visionFinishConfidence: 0.9,
+      visionPattern: "solid",
+      visionPatternConfidence: 0.9,
+      imageQuality: "good",
+    },
+    imageUrl: "https://cdn.shopify.com/test.jpg",
+    productId: "gid://shopify/Product/1",
+    includeExperimental: true,
+  });
+  assert(
+    analysis.signalResults.some((s) => s.signal === "sleeveType"),
+    "sleeveType signal present when claimed",
+  );
+  assert(
+    analysis.signalResults.some(
+      (s) => s.signal === "sleeveType" && s.verdict === "NOT_DETECTABLE",
+    ),
+    "sleeveType NOT_DETECTABLE when vision omitted",
+  );
+  assert(
+    !analysis.signalResults.some((s) => s.signal === "finish"),
+    "skipped finish does not appear in Guardian",
+  );
+  assert(
+    !analysis.signalResults.some((s) => s.signal === "pattern"),
+    "skipped pattern does not appear in Guardian",
+  );
+  assert(
+    !analysis.signalResults.some((s) => s.signal === "neckline"),
+    "skipped neckline does not appear in Guardian",
   );
 }
 

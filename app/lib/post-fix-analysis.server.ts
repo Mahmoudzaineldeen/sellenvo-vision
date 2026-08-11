@@ -13,6 +13,7 @@ import { getShopSettings } from "./shop-settings.server";
 import { persistAnalysis } from "./analysis-persist.server";
 import { logEvent } from "./logger.server";
 import { fetchProductSellenvoMetafields } from "./metafields.server";
+import { resolveCategoryPack } from "./attributes";
 import type { AnalysisResult } from "./types";
 import type { AdminClient, ProductNode } from "./shopify-fixes.server";
 import type { ProductMetafields } from "./metafields.server";
@@ -79,12 +80,22 @@ export async function recomputeAnalysisAfterFix(args: {
               material: null,
               pattern: null,
               finish: null,
+              sleeveType: null,
+              neckline: null,
+              closureType: null,
+              shoeStyle: null,
+              strapType: null,
             }),
           )
         : Promise.resolve({
             material: null,
             pattern: null,
             finish: null,
+            sleeveType: null,
+            neckline: null,
+            closureType: null,
+            shoeStyle: null,
+            strapType: null,
           }),
   ]);
 
@@ -92,6 +103,11 @@ export async function recomputeAnalysisAfterFix(args: {
     material: metafields?.material ?? undefined,
     pattern: metafields?.pattern ?? undefined,
     finish: metafields?.finish ?? undefined,
+    sleeveType: metafields?.sleeveType ?? undefined,
+    neckline: metafields?.neckline ?? undefined,
+    closureType: metafields?.closureType ?? undefined,
+    shoeStyle: metafields?.shoeStyle ?? undefined,
+    strapType: metafields?.strapType ?? undefined,
   });
   const colorIds = findColorOptionIds(args.product);
   const analysis = buildAnalysisResultV2({
@@ -102,7 +118,18 @@ export async function recomputeAnalysisAfterFix(args: {
     colorOptionId: colorIds?.optionId,
     colorOptionValueId: colorIds?.optionValueId,
     materialWriteMode: settings.materialWriteMode,
-    includeExperimental: settings.showExperimentalAttributes,
+    includeExperimental:
+      settings.showExperimentalAttributes ||
+      Boolean(
+        metafields?.pattern?.trim() ||
+          metafields?.finish?.trim() ||
+          metafields?.sleeveType?.trim() ||
+          metafields?.neckline?.trim() ||
+          metafields?.closureType?.trim() ||
+          metafields?.shoeStyle?.trim() ||
+          metafields?.strapType?.trim(),
+      ) ||
+      resolveCategoryPack(args.product.productType) !== "core",
   });
   analysis.analysisSource = "cached-recheck";
   const consistencyMs = Date.now() - consistencyStarted;

@@ -23,11 +23,11 @@ import {
 import {
   colorsMatch,
   normalizeColorName,
-} from "../app/lib/color-normalize.server";
+} from "../app/lib/color-normalize";
 import {
   productTypesMatch,
   normalizeProductType,
-} from "../app/lib/product-type-normalize.server";
+} from "../app/lib/product-type-normalize";
 import {
   materialsMatch,
   normalizeMaterialName,

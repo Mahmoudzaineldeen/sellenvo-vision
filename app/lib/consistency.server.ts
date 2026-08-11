@@ -7,8 +7,8 @@ import type {
   SignalResult,
   ConsistencyIssue,
 } from "./types";
-import { colorsMatch, normalizeColorName } from "./color-normalize.server";
-import { productTypesMatch } from "./product-type-normalize.server";
+import { colorsMatch, normalizeColorName } from "./color-normalize";
+import { productTypesMatch } from "./product-type-normalize";
 import {
   MATERIAL_KEYWORDS,
   materialsMatch,
@@ -16,13 +16,10 @@ import {
 } from "./materials";
 import {
   getAttribute,
-  isRecognizedPattern,
-  isRecognizedFinish,
-  normalizePatternName,
-  normalizeFinishName,
-  patternsMatch,
-  finishesMatch,
+  EXPERIMENTAL_METAFIELD_KEYS,
+  selectAttributeKeysForProduct,
 } from "./attributes";
+import type { AttributeKey } from "./attributes";
 
 const CONFIDENCE_THRESHOLD = 0.7;
 
@@ -34,7 +31,79 @@ const BASE_WEIGHTS: Record<string, number> = {
   material: 0.25,
   pattern: 0.15,
   finish: 0.15,
+  sleeveType: 0.12,
+  neckline: 0.12,
+  closureType: 0.12,
+  shoeStyle: 0.15,
+  strapType: 0.12,
 };
+
+/** Map experimental attribute → listing claim + visual fields */
+const EXPERIMENTAL_SIGNAL_MAP: Record<
+  string,
+  {
+    claimed: (l: ListingFacts) => string | null | undefined;
+    detected: (v: VisualFacts) => string | null | undefined;
+    confidence: (v: VisualFacts) => number | null | undefined;
+  }
+> = {
+  pattern: {
+    claimed: (l) => l.claimedPattern,
+    detected: (v) => v.visionPattern,
+    confidence: (v) => v.visionPatternConfidence,
+  },
+  finish: {
+    claimed: (l) => l.claimedFinish,
+    detected: (v) => v.visionFinish,
+    confidence: (v) => v.visionFinishConfidence,
+  },
+  sleeveType: {
+    claimed: (l) => l.claimedSleeveType,
+    detected: (v) => v.visionSleeveType,
+    confidence: (v) => v.visionSleeveTypeConfidence,
+  },
+  neckline: {
+    claimed: (l) => l.claimedNeckline,
+    detected: (v) => v.visionNeckline,
+    confidence: (v) => v.visionNecklineConfidence,
+  },
+  closureType: {
+    claimed: (l) => l.claimedClosureType,
+    detected: (v) => v.visionClosureType,
+    confidence: (v) => v.visionClosureTypeConfidence,
+  },
+  shoeStyle: {
+    claimed: (l) => l.claimedShoeStyle,
+    detected: (v) => v.visionShoeStyle,
+    confidence: (v) => v.visionShoeStyleConfidence,
+  },
+  strapType: {
+    claimed: (l) => l.claimedStrapType,
+    detected: (v) => v.visionStrapType,
+    confidence: (v) => v.visionStrapTypeConfidence,
+  },
+};
+
+/** Experimental keys from listing pack ∪ vision pack ∪ any claimed metafields. */
+function experimentalKeysToEvaluate(
+  listing: ListingFacts,
+  visual: VisualFacts,
+): AttributeKey[] {
+  const keys = new Set<AttributeKey>();
+  for (const source of [listing.productType, visual.visionProductType]) {
+    for (const key of selectAttributeKeysForProduct({
+      productType: source,
+      includeExperimental: true,
+    })) {
+      if (EXPERIMENTAL_METAFIELD_KEYS.includes(key)) keys.add(key);
+    }
+  }
+  for (const key of EXPERIMENTAL_METAFIELD_KEYS) {
+    const mapping = EXPERIMENTAL_SIGNAL_MAP[key];
+    if (mapping?.claimed(listing)?.trim()) keys.add(key);
+  }
+  return [...keys];
+}
 
 export {
   MATERIAL_KEYWORDS,
@@ -358,87 +427,64 @@ export function evaluateConsistency(
     } // end else (not explicit not_detectable)
   }
 
-  // --- Pattern (EXPERIMENTAL) ---
-  if (
-    includeExperimental &&
-    getAttribute("pattern")?.status === "EXPERIMENTAL" &&
-    listing.claimedPattern
-  ) {
-    const raw = visual.visionPattern ?? null;
-    const conf = visual.visionPatternConfidence ?? null;
-    if (raw && conf !== null) {
-      const detected = normalizePatternName(raw);
-      if (
-        detected === "unknown" ||
-        detected === "not_detectable" ||
-        !isRecognizedPattern(detected)
-      ) {
-        signalResults.push({
-          signal: "pattern",
-          claimed: listing.claimedPattern,
-          detected,
-          confidence: conf,
-          verdict: "NOT_DETECTABLE",
-          evidence: "Could not confidently determine the pattern from this image.",
-        });
-      } else {
-        const result = evaluateSignal({
-          signal: "pattern",
-          claimed: listing.claimedPattern,
-          detectedRaw: detected,
-          confidence: conf,
-          match: patternsMatch,
-          normalizeDetected: normalizePatternName,
-          matchEvidence: `Pattern matches: "${listing.claimedPattern}".`,
-          mismatchPrefix: `Pattern mismatch: listing "${listing.claimedPattern}" vs detected "${detected}"`,
-          uncertainPrefix: `Low confidence pattern comparison: listing "${listing.claimedPattern}" vs detected "${detected}".`,
-          threshold: getAttribute("pattern")?.confidenceThreshold,
-        });
-        signalResults.push(result);
-        pushIssue(issues, result);
-      }
-    }
-  }
+  // --- Experimental metafield attributes (confirm-only) ---
+  // Only show attributes the merchant claimed. Skipped / unset fields stay out of Guardian.
+  if (includeExperimental) {
+    for (const key of experimentalKeysToEvaluate(listing, visual)) {
+      const def = getAttribute(key);
+      const mapping = EXPERIMENTAL_SIGNAL_MAP[key];
+      if (!def || def.status !== "EXPERIMENTAL" || !mapping) continue;
 
-  // --- Finish (EXPERIMENTAL) ---
-  if (
-    includeExperimental &&
-    getAttribute("finish")?.status === "EXPERIMENTAL" &&
-    listing.claimedFinish
-  ) {
-    const raw = visual.visionFinish ?? null;
-    const conf = visual.visionFinishConfidence ?? null;
-    if (raw && conf !== null) {
-      const detected = normalizeFinishName(raw);
-      if (
+      const claimed = mapping.claimed(listing)?.trim() || null;
+      if (!claimed) continue;
+
+      const raw = mapping.detected(visual) ?? null;
+      const conf = mapping.confidence(visual) ?? null;
+
+      if (!raw || conf === null) {
+        signalResults.push({
+          signal: key as SignalResult["signal"],
+          claimed,
+          detected: null,
+          confidence: null,
+          verdict: "NOT_DETECTABLE",
+          evidence: `Listing claims "${claimed}" for ${def.label.toLowerCase()}, but the image did not yield a reliable visual reading.`,
+        });
+        continue;
+      }
+
+      const detected = def.normalize(raw);
+      const unrecognized =
         detected === "unknown" ||
         detected === "not_detectable" ||
-        !isRecognizedFinish(detected)
-      ) {
+        (def.isRecognized ? !def.isRecognized(detected) : false);
+
+      if (unrecognized) {
         signalResults.push({
-          signal: "finish",
-          claimed: listing.claimedFinish,
+          signal: key as SignalResult["signal"],
+          claimed,
           detected,
           confidence: conf,
           verdict: "NOT_DETECTABLE",
-          evidence: "Could not confidently determine the finish from this image.",
+          evidence: `Could not confidently determine the ${def.label.toLowerCase()} from this image.`,
         });
-      } else {
-        const result = evaluateSignal({
-          signal: "finish",
-          claimed: listing.claimedFinish,
-          detectedRaw: detected,
-          confidence: conf,
-          match: finishesMatch,
-          normalizeDetected: normalizeFinishName,
-          matchEvidence: `Finish matches: "${listing.claimedFinish}".`,
-          mismatchPrefix: `Finish mismatch: listing "${listing.claimedFinish}" vs detected "${detected}"`,
-          uncertainPrefix: `Low confidence finish comparison: listing "${listing.claimedFinish}" vs detected "${detected}".`,
-          threshold: getAttribute("finish")?.confidenceThreshold,
-        });
-        signalResults.push(result);
-        pushIssue(issues, result);
+        continue;
       }
+
+      const result = evaluateSignal({
+        signal: key as SignalResult["signal"],
+        claimed,
+        detectedRaw: detected,
+        confidence: conf,
+        match: def.match,
+        normalizeDetected: def.normalize,
+        matchEvidence: `${def.label} matches: "${claimed}".`,
+        mismatchPrefix: `${def.label} mismatch: listing "${claimed}" vs detected "${detected}"`,
+        uncertainPrefix: `Low confidence ${def.label.toLowerCase()} comparison: listing "${claimed}" vs detected "${detected}".`,
+        threshold: def.confidenceThreshold,
+      });
+      signalResults.push(result);
+      pushIssue(issues, result);
     }
   }
 
@@ -633,7 +679,8 @@ export function buildAnalysisResultV2(args: BuildAnalysisOptions): AnalysisResul
   }
 
   if (includeExperimental) {
-    for (const field of ["pattern", "finish"] as const) {
+    for (const field of EXPERIMENTAL_METAFIELD_KEYS) {
+      const mapping = EXPERIMENTAL_SIGNAL_MAP[field];
       const issue = issues.find(
         (i) => i.signal === field && i.verdict === "MISMATCH",
       );
@@ -646,13 +693,13 @@ export function buildAnalysisResultV2(args: BuildAnalysisOptions): AnalysisResul
         signal.confidence !== null &&
         signal.confidence >= threshold &&
         visual.imageQuality !== "poor" &&
-        signal.detected
+        signal.detected &&
+        mapping
       ) {
-        const claimed =
-          field === "pattern" ? listing.claimedPattern : listing.claimedFinish;
+        const claimed = mapping.claimed(listing)?.trim() || null;
         if (claimed) {
           suggestedFixes.push({
-            field,
+            field: field as SuggestedFix["field"],
             currentValue: capitalizeLabel(claimed),
             suggestedValue: capitalizeLabel(signal.detected),
             productId,
@@ -678,7 +725,7 @@ export function buildAnalysisResultV2(args: BuildAnalysisOptions): AnalysisResul
 
 /**
  * Extract ListingFacts from a Shopify product's title/type/options.
- * Optional metafield values enable material/pattern/finish dual-read.
+ * Optional metafield values enable material + experimental attribute dual-read.
  */
 export function extractListingFacts(
   product: {
@@ -690,6 +737,11 @@ export function extractListingFacts(
     material?: string | null;
     pattern?: string | null;
     finish?: string | null;
+    sleeveType?: string | null;
+    neckline?: string | null;
+    closureType?: string | null;
+    shoeStyle?: string | null;
+    strapType?: string | null;
   },
 ): ListingFacts {
   const colorOption = product.options.find(
@@ -710,6 +762,11 @@ export function extractListingFacts(
     materialSource,
     claimedPattern: metafields?.pattern?.trim() || null,
     claimedFinish: metafields?.finish?.trim() || null,
+    claimedSleeveType: metafields?.sleeveType?.trim() || null,
+    claimedNeckline: metafields?.neckline?.trim() || null,
+    claimedClosureType: metafields?.closureType?.trim() || null,
+    claimedShoeStyle: metafields?.shoeStyle?.trim() || null,
+    claimedStrapType: metafields?.strapType?.trim() || null,
   };
 }
 

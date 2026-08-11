@@ -28,7 +28,12 @@ export type AttributeKey =
   | "productType"
   | "material"
   | "pattern"
-  | "finish";
+  | "finish"
+  | "sleeveType"
+  | "neckline"
+  | "closureType"
+  | "shoeStyle"
+  | "strapType";
 
 export type VisualAttribute = {
   value: string | null;
@@ -62,6 +67,8 @@ export type AttributeDefinition = {
   storage: AttributeStorage;
   normalize: (raw: string) => string;
   match: (claimed: string, detected: string) => boolean;
+  /** Optional recognizer — unrecognized → NOT_DETECTABLE */
+  isRecognized?: (raw: string) => boolean;
 };
 
 export type CategoryPackId =

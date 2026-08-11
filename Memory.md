@@ -1,15 +1,17 @@
 # Memory — sellenvo-vision
 
 ## State
-Catalog Integrity roadmap implemented (Phases 1–4 foundation):
-registry + metafield material + persist/audit + Catalog Health + SSRF/policy +
-pattern/finish EXPERIMENTAL + jobs/webhooks + eval scorecard scaffold.
+Catalog Integrity Phases 1–4 + expanded EXPERIMENTAL attributes:
+PRODUCTION: color, productType, material.
+EXPERIMENTAL (confirm-only, Settings): pattern, finish, sleeveType, neckline,
+closureType, shoeStyle, strapType — category packs apparel/footwear/bags/jewelry.
+Wired: registry → vision prompt → consistency → metafields → mutations → Guardian/FixModal.
 
 ## Validate
-`npm run test:all` · `npm run typecheck` · `npm run lint` · `npm run build` · `npx prisma validate`
+`npm run test:all` · `npx tsc --noEmit` · `npm run lint` · `npm run build`
 
 ## Readiness
-**PILOT READY** — not App Store ready until real-image FAFR measured.
+**PILOT READY** — do not promote experimental → PRODUCTION without FAFR/eval gate.
 
 ## Docs
-`docs/CATALOG_INTEGRITY.md` · `EVALUATION.md` · `ARCHITECTURE.md`
+`README.md` · `docs/CATALOG_INTEGRITY.md` · `EVALUATION.md` · `ARCHITECTURE.md`

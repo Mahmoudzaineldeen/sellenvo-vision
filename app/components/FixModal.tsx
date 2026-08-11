@@ -1,8 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FixableSignal, SuggestedFix } from "../lib/types";
 import { MATERIAL_KEYWORDS } from "../lib/materials";
+import { getAttribute } from "../lib/attributes";
 import { PATTERN_KEYWORDS } from "../lib/attributes/normalize/pattern";
 import { FINISH_KEYWORDS } from "../lib/attributes/normalize/finish";
+import { SLEEVE_TYPE_KEYWORDS } from "../lib/attributes/normalize/sleeve-type";
+import { NECKLINE_KEYWORDS } from "../lib/attributes/normalize/neckline";
+import { CLOSURE_TYPE_KEYWORDS } from "../lib/attributes/normalize/closure-type";
+import { SHOE_STYLE_KEYWORDS } from "../lib/attributes/normalize/shoe-style";
+import { STRAP_TYPE_KEYWORDS } from "../lib/attributes/normalize/strap-type";
 
 const MODAL_ID = "fix-confirmation-modal";
 
@@ -23,10 +29,27 @@ function fieldLabel(
     if (materialWriteMode === "both") return "Material (metafield + title)";
     return "Material (metafield)";
   }
-  if (field === "pattern") return "Pattern";
-  if (field === "finish") return "Finish";
-  return "Color";
+  if (field === "color") return "Color";
+  return getAttribute(field)?.label ?? field;
 }
+
+function titleCaseKeyword(value: string): string {
+  return value
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
+}
+
+const EXPERIMENTAL_EDIT_OPTIONS: Partial<Record<FixableSignal, readonly string[]>> = {
+  pattern: PATTERN_KEYWORDS,
+  finish: FINISH_KEYWORDS,
+  sleeveType: SLEEVE_TYPE_KEYWORDS,
+  neckline: NECKLINE_KEYWORDS,
+  closureType: CLOSURE_TYPE_KEYWORDS,
+  shoeStyle: SHOE_STYLE_KEYWORDS,
+  strapType: STRAP_TYPE_KEYWORDS,
+};
 
 function materialStorageExplanation(mode: MaterialWriteMode): string {
   if (mode === "title") {
@@ -268,37 +291,23 @@ export function FixModal({
               ].filter(Boolean),
             ),
           )
-        : field === "pattern"
+        : field && EXPERIMENTAL_EDIT_OPTIONS[field]
           ? Array.from(
               new Set(
                 [
                   suggestedValue,
                   currentValue,
-                  ...PATTERN_KEYWORDS.map(
-                    (p) => p.charAt(0).toUpperCase() + p.slice(1),
-                  ),
+                  ...EXPERIMENTAL_EDIT_OPTIONS[field]!.map(titleCaseKeyword),
                 ].filter(Boolean),
               ),
             )
-          : field === "finish"
-            ? Array.from(
-                new Set(
-                  [
-                    suggestedValue,
-                    currentValue,
-                    ...FINISH_KEYWORDS.map(
-                      (f) => f.charAt(0).toUpperCase() + f.slice(1),
-                    ),
-                  ].filter(Boolean),
+          : Array.from(
+              new Set(
+                [suggestedValue, currentValue, ...COMMON_TYPES].filter(
+                  Boolean,
                 ),
-              )
-            : Array.from(
-                new Set(
-                  [suggestedValue, currentValue, ...COMMON_TYPES].filter(
-                    Boolean,
-                  ),
-                ),
-              );
+              ),
+            );
 
   const toggleField = (f: FixableSignal) => {
     setSelectedFields((prev) => {

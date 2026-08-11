@@ -19,6 +19,8 @@ export type VisionAnalyzeInput = {
   dataUri?: string;
   includeExperimental?: boolean;
   requireEnsembleAgreement?: boolean;
+  /** Listing product type for category attribute packs. */
+  productType?: string | null;
 };
 
 export type VisionAnalyzeResult = {
