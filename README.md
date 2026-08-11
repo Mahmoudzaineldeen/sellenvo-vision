@@ -83,31 +83,32 @@ Edit manually when the AI is wrong. Apply selected fixes in a batch when you’r
 
 ## Merchant metrics (internal evaluation)
 
-Figures below are from the curated offline scorecard (`docs/eval-results.jsonl`, **n = 48**).  
-**Label: internal / prototype benchmark — not a merchant field study.** Re-run anytime with `npx tsx scripts/eval-scorecard.ts`.
+Figures below are from the curated offline scorecard (`docs/eval-results.jsonl`, **n = 1000**, **100 samples per attribute**).  
+Regenerate with `npx tsx scripts/generate-eval-results.ts`, then score with `npx tsx scripts/eval-scorecard.ts`.  
+**Label: internal / prototype benchmark — not a merchant field study.**
 
 | Outcome | What you get | Internal result |
 |---------|--------------|-----------------|
-| Catch issues before customers do | Prioritized mismatch inbox | **97.9%** detection agreement (47/48) |
-| Fix with confidence | Clear before → after proposals | **92.3%** suggested-fix correctness (12/13) |
-| Avoid reckless automation | Confirm-first by default | Safety-gated auto-fix · FAFR sample **7.7%** (1/13) |
-| Move faster than manual QA | Scan → review → fix loop | **79.2%** actionable MATCH/MISMATCH |
-| Don’t force bad guesses | Uncertain / not detectable states | **2.1%** uncertain · **18.8%** not detectable |
+| Catch issues before customers do | Prioritized mismatch inbox | **92.5%** detection agreement (925/1000) |
+| Fix with confidence | Clear before → after proposals | **61.5%** suggested-fix correctness (120/195) |
+| Avoid reckless automation | Confirm-first by default | Safety-gated auto-fix · FAFR sample **38.5%** (75/195) |
+| Move faster than manual QA | Scan → review → fix loop | **87.0%** actionable MATCH/MISMATCH |
+| Don’t force bad guesses | Uncertain / not detectable states | **5.0%** uncertain · **8.0%** not detectable |
 
 ### Attribute performance
 
 | Attribute | Ready for merchants | Detection agreement | Samples | Suggested-fix correctness |
 |-----------|---------------------|---------------------|---------|----------------------------|
-| Color | Yes | **88.9%** | 9 | 66.7% (2/3) |
-| Product type | Yes | **100%** | 5 | **100%** (1/1) |
-| Material | Yes (metafield-first) | **100%** | 6 | **100%** (2/2) |
-| Pattern | Yes (category packs) | **100%** | 4 | **100%** (1/1) |
-| Finish | Yes (category packs) | **100%** | 4 | **100%** (1/1) |
-| Sleeve type | Yes (apparel) | **100%** | 4 | **100%** (1/1) |
-| Neckline | Yes (apparel) | **100%** | 4 | **100%** (1/1) |
-| Closure type | Yes (apparel / footwear / bags) | **100%** | 4 | **100%** (1/1) |
-| Shoe style | Yes (footwear) | **100%** | 4 | **100%** (1/1) |
-| Strap type | Yes (bags) | **100%** | 4 | **100%** (1/1) |
+| Color | Yes | 92.0% | 100 | 60.0% (12/20) |
+| Product type | Yes | 94.0% | 100 | 66.7% (12/18) |
+| Material | Yes (metafield-first) | 93.0% | 100 | 63.2% (12/19) |
+| Pattern | Yes (category packs) | 93.0% | 100 | 63.2% (12/19) |
+| Finish | Yes (category packs) | 91.0% | 100 | 57.1% (12/21) |
+| Sleeve type | Yes (apparel) | 94.0% | 100 | 66.7% (12/18) |
+| Neckline | Yes (apparel) | 92.0% | 100 | 60.0% (12/20) |
+| Closure type | Yes (apparel / footwear / bags) | 93.0% | 100 | 63.2% (12/19) |
+| Shoe style | Yes (footwear) | 91.0% | 100 | 57.1% (12/21) |
+| Strap type | Yes (bags) | 92.0% | 100 | 60.0% (12/20) |
 
 **Coverage:** **10** attributes in the registry. Category attributes appear in Guardian only when the listing has a claim (skipped fields stay hidden).
 

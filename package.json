@@ -24,7 +24,9 @@
     "test:mutations": "tsx scripts/test-mutations.ts",
     "test:settings": "tsx scripts/test-settings-effects.ts",
     "test:all": "npm run test:consistency && npm run test:registry && npm run test:mutations && npm run test:settings",
-    "test:vision": "tsx scripts/test-vision-smoke.ts"
+    "test:vision": "tsx scripts/test-vision-smoke.ts",
+    "eval:generate": "tsx scripts/generate-eval-results.ts",
+    "eval:scorecard": "tsx scripts/eval-scorecard.ts"
   },
   "type": "module",
   "engines": {

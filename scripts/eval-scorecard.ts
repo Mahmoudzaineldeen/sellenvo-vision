@@ -98,6 +98,9 @@ for (const [attr, list] of byAttr) {
   console.log(`  detection agreement: ${pct(attrOk, list.length)}`);
   console.log(`  suggested fixes: ${attrFix.length}`);
   console.log(
+    `  suggested-fix correctness: ${pct(attrFix.length - attrBadFix.length, attrFix.length)}`,
+  );
+  console.log(
     `  False Auto-Fix Rate: ${pct(attrBadFix.length, attrFix.length)}`,
   );
   console.log(`  false mismatch count: ${attrFalseMismatch}`);
