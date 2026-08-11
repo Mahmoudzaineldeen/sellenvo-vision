@@ -123,9 +123,9 @@ async function testVision(
       response_format: { type: "json_object" },
       max_completion_tokens: 64,
       temperature: 0,
-      // @ts-expect-error groq qwen
       reasoning_effort: "none",
-    } as Parameters<Groq["chat"]["completions"]["create"]>[0]);
+      stream: false,
+    });
     const text = r.choices?.[0]?.message?.content ?? "";
     console.log(`  vision [${label}]: OK (${text.replace(/\s+/g, " ").slice(0, 80)})`);
     return true;
