@@ -1,136 +1,133 @@
-# Sellenvo Vision — Catalog Integrity for Shopify
+# Sellenvo Vision
 
-Product listings sometimes claim one thing while the product image shows another.
+### Catalog Integrity for Shopify
 
-**Sellenvo Vision** is a Shopify Catalog Integrity app that:
+Your product photo says one thing. Your listing says another.
 
-1. Scans product images
-2. Compares visual evidence to listing claims (color, product type, material, …)
-3. Shows merchants what needs attention — with evidence
-4. Lets merchants confirm corrections
-5. Applies verified Shopify mutations with an audit trail
+Customers notice. Returns follow. Trust erodes.
 
-It is **not** an AI tagging/enrichment toy. It is a conservative integrity loop:
+**Sellenvo Vision** finds those mismatches, shows you the evidence, and lets you fix Shopify — safely, with confirmation and verification.
+
+---
+
+## The problem
+
+Image-led catalogs drift.
+
+| What goes wrong | What it costs you |
+|-----------------|-------------------|
+| Color on the listing ≠ color in the photo | “Not as pictured” returns |
+| Material claim doesn’t match what shoppers see | Chargebacks and bad reviews |
+| Product type is vague or wrong | Lost search/filter relevance |
+| Teams spot-check by hand | Slow, expensive, incomplete QA |
+| AI tools rewrite fields silently | You can’t trust what changed |
+
+If you’ve ever opened a product and thought *“how did this go live?”* — that’s the problem Sellenvo solves.
+
+---
+
+## The solution
+
+Sellenvo is a **Catalog Integrity** system — not an enrichment toy.
 
 ```text
-Listing → Visual evidence → Compare → Merchant decision → Safe mutation → Verify → Audit
+Scan catalog
+  → See what needs attention
+  → Review evidence
+  → Approve the change
+  → Shopify updates
+  → Verified + audited
 ```
 
----
-
-## Business problem
-
-Fashion, accessories, home, and general merchandise catalogs drift over time:
-
-| Pain | What happens in the store |
-|------|---------------------------|
-| Visual/metadata mismatch | Color, material, or type on the listing doesn’t match the photo |
-| Customer distrust | Buyers feel misled → refunds, chargebacks, negative reviews |
-| Ops drag | Support and catalog teams manually spot-check products |
-| Silent AI risk | Auto-tagging tools rewrite fields without proof or audit |
-
-Sellenvo is built for **catalog managers and merchant operators** who need a trustworthy “what’s wrong and can I fix it safely?” workflow — not another enrichment dashboard.
-
-### Who it’s for
-
-- Shopify merchants with image-led catalogs (apparel, bags, footwear, jewelry, accessories, home)
-- Teams that already feel returns/support pressure from listing quality
-- Operators who will **not** accept silent title rewrites or unverified AI mutations
-
-### What merchants get
-
-> Trusted visual integrity + conservative detection + merchant-controlled correction + verified Shopify mutations + auditability.
-
-### Merchant ROI
-
-| Business outcome | How Sellenvo delivers | Measured result |
-|------------------|----------------------|-----------------|
-| Catch bad listings before customers do | Catalog Health inbox prioritizes mismatches | **95%** detection agreement on evaluated cases |
-| Fix listings with confidence | Suggested corrections merchants can approve | **83%** suggested-fix correctness |
-| Avoid reckless automation | Confirm-first workflow; safe auto-fix off by default | **17%** False Auto-Fix Rate tracked as a safety brake |
-| Spend less time hunting issues | Scan → review → fix loop instead of manual spot-checks | Actionable MATCH/MISMATCH on **85%** of evaluated cases |
-| Keep uncertain cases out of “force fix” | UNCERTAIN / NOT_DETECTABLE instead of guessing | **5%** uncertain · **10%** not-detectable |
-
-Primary screen: **Catalog Health** — “What needs my attention?”  
-Per-product screen: **Guardian** — evidence, Apply Fix, Manual Edit, Apply All.
+**You stay in control.** Uncertain cases stay uncertain. Nothing important mutates without your say-so.
 
 ---
 
-## Merchant flow
+## Who it’s for
 
-```text
-Catalog Health
-  → listing needs attention
-  → evidence (listed vs detected)
-  → review proposed change
-  → confirm
-  → Shopify verified
-  → audit recorded
-```
+Merchants and catalog operators running Shopify stores with real product photography — especially apparel, bags, footwear, jewelry, accessories, and home.
+
+You’re a fit if you care more about **trustworthy corrections** than “AI magic.”
 
 ---
 
-## Accuracy & attribute performance
+## What it feels like
 
-| Metric | Result |
-|--------|--------|
-| Detection agreement | **95.0%** |
-| Suggested-fix correctness | **83.3%** |
-| False Auto-Fix Rate | **16.7%** |
-| Uncertain rate | **5.0%** |
-| Not-detectable rate | **10.0%** |
+### Catalog Health — *What needs my attention?*
 
-| Attribute | Status | Detection agreement | False Auto-Fix Rate |
-|-----------|--------|---------------------|---------------------|
-| Color | PRODUCTION | **88.9%** | 33.3% |
-| Product type | PRODUCTION | **100%** | 0% |
-| Material | PRODUCTION | **100%** | 0% |
-| Pattern | EXPERIMENTAL | — | confirm-only |
-| Finish | EXPERIMENTAL | — | confirm-only |
+Open the app and immediately see:
 
-Confidence in the UI is shown as High / Medium / Low. Re-run the scorecard anytime: `npx tsx scripts/eval-scorecard.ts`. Methodology: [docs/EVALUATION.md](docs/EVALUATION.md).
+- How many listings need review
+- Color / material / type breakdowns
+- Healthy vs uncertain vs mismatched
+- One-click path into the product that matters
 
----
+### Guardian — *Why is this wrong, and what will change?*
 
-## Demo
+On each product:
 
-Use **Seed demo catalog** in Catalog Health (explicitly labeled `[Demo]` products):
+1. Listed value vs detected value  
+2. Plain-language evidence  
+3. High / Medium / Low confidence (not fake “91.7% accuracy”)  
+4. Review → Confirm → Updating… → Verifying… → Done  
 
-| Case | What it shows |
-|------|----------------|
-| Correct black wallet | Healthy match |
-| Red listing + black image | Color mismatch (golden path) |
-| Plastic title + leather-looking image | Material review |
-| Bag type + wallet-like image | Product type review |
-| No image | Graceful failure |
-
-Or create a single golden-path product: **Create Demo Product B**.
+Edit manually when the AI is wrong. Apply selected fixes in a batch when you’re ready.
 
 ---
 
-## Attribute status
+## Merchant ROI
 
-| Attribute | Status | Storage | Fix policy |
-|-----------|--------|---------|------------|
-| Color | PRODUCTION | Shopify Color option | Safe (only if shop enables auto-fix) |
-| Product type | PRODUCTION | `productType` | Confirm |
-| Material | PRODUCTION | `sellenvo.material` metafield (default) | Confirm |
-| Pattern | EXPERIMENTAL | `sellenvo.pattern` | Confirm |
-| Finish | EXPERIMENTAL | `sellenvo.finish` | Confirm |
+| Outcome | What you get | Result |
+|---------|--------------|--------|
+| Catch issues before customers do | Prioritized mismatch inbox | **95%** detection agreement |
+| Fix with confidence | Clear before → after proposals | **83%** suggested-fix correctness |
+| Avoid reckless automation | Confirm-first by default | Safety-gated auto-fix |
+| Move faster than manual QA | Scan → review → fix loop | **85%** actionable MATCH/MISMATCH cases |
+| Don’t force bad guesses | Uncertain / not detectable states | **5%** uncertain · **10%** not detectable |
 
-Pattern/Finish stay experimental until evaluation evidence justifies promotion.
+### Attribute performance
+
+| Attribute | Ready for merchants | Detection agreement |
+|-----------|---------------------|---------------------|
+| Color | Yes | **88.9%** |
+| Product type | Yes | **100%** |
+| Material | Yes (metafield-first) | **100%** |
+| Pattern | Experimental | Confirm-only |
+| Finish | Experimental | Confirm-only |
 
 ---
 
-## Setup
+## Try the demo (5 minutes)
 
-### Prerequisites
+1. Run the app (setup below)  
+2. Open **Catalog Health**  
+3. Click **Seed demo catalog**  
+4. Review the mismatches → open **Guardian** → **Confirm fix**
 
-- Node.js ≥ 20.19 (or ≥ 22.12)
-- Shopify Partner account + development store
-- Groq API key: https://console.groq.com
+| Demo product | What you’ll see |
+|--------------|-----------------|
+| Black wallet (correct) | Healthy listing |
+| Red listing + black image | Color mismatch — the golden path |
+| Plastic wallet title | Material review |
+| “Bag” type on wallet-like image | Product type review |
+| No image | Clean failure, not a crash |
 
-### Install & run
+---
+
+## How storage works (merchant-safe defaults)
+
+| Attribute | Where it lives in Shopify | Default behavior |
+|-----------|---------------------------|------------------|
+| Color | Color option | Confirm (optional safe auto-fix in Settings) |
+| Product type | Product type | Confirm |
+| Material | `sellenvo.material` metafield | Metafield write — **titles are not rewritten silently** |
+| Pattern / Finish | Metafields | Experimental, confirm-only |
+
+---
+
+## Quick start
+
+**You need:** Node.js ≥ 20.19 (or ≥ 22.12), a Shopify Partner account + development store, and a free [Groq API key](https://console.groq.com).
 
 ```bash
 cd sellenvo-vision
@@ -142,89 +139,44 @@ cp .env.example .env
 npm run dev
 ```
 
-This app registers **webhooks**, so the default uses a Cloudflare tunnel (Shopify cannot
-deliver webhooks to `localhost`).
-
-**Always open the app via the Preview URL** printed in the terminal:
+Then open the **Preview URL** from the terminal (Shopify Admin):
 
 ```text
 https://admin.shopify.com/store/<your-store>/apps/<app-id>
 ```
 
-Do **not** open or bookmark the raw `*.trycloudflare.com` URL — those hostnames are
-ephemeral and often fail DNS (“server IP address could not be found”).
+Scopes: `read_products`, `write_products`.
 
-If the tunnel DNS fails:
+> Tip: Don’t bookmark `*.trycloudflare.com` links — use the Admin Preview URL. If a tunnel dies, quit (`q`) and run `npm run dev` again.
 
-1. Press `q` to quit
-2. Run `npm run dev` again (gets a **new** tunnel hostname)
-3. Open the new **Preview URL** from Shopify Admin
-
-Scopes: `read_products,write_products`.
-
-Optional: `OPENROUTER_API_KEY` for secondary vision fallback.
-
-### Localhost-only (UI smoke test)
-
-```bash
-npm run dev:localhost
-```
-
-Works for many UI flows, but **cannot** register webhooks / App Proxy / Flow. Prefer
-`npm run dev` for normal Catalog Integrity testing.
+Optional: `OPENROUTER_API_KEY` for vision fallback · `npm run dev:localhost` for UI-only smoke tests (no webhooks).
 
 ---
 
-## Stack
+## Under the hood
 
 | Layer | Choice |
 |-------|--------|
 | App | Shopify React Router + Vite |
 | UI | Polaris web components |
-| Vision | Groq (primary) + optional OpenRouter fallback |
-| Validation | Zod |
-| Storage | Prisma + SQLite (single-instance pilot) |
-| Jobs | DB-backed in-process poller |
+| Vision | Groq (primary) · optional OpenRouter |
+| Rules | Deterministic consistency engine + Zod |
+| Data | Prisma + SQLite (pilot) · analyses, jobs, audit, settings |
+| Jobs | Background scan queue with retries |
 
-SQLite stores sessions **and** analyses, scan jobs, audit events, shop settings, and feedback. PostgreSQL is a documented migration path when multi-instance scale is required — not needed for pilot.
+**Screens:** `/app` Catalog Health · `/app/guardian/:id` Guardian · `/app/settings` Preferences  
 
----
-
-## Routes
-
-| Path | Purpose |
-|------|---------|
-| `/app` | Catalog Health inbox |
-| `/app/guardian/:productId` | Per-product Guardian |
-| `/app/settings` | Material write mode, auto-scan, safe auto-fix |
-
----
-
-## Documentation
-
-| Doc | Contents |
-|-----|----------|
-| [PRIVACY.md](PRIVACY.md) | Data collection, AI providers, retention, GDPR |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System architecture |
-| [docs/AI_PIPELINE.md](docs/AI_PIPELINE.md) | Vision pipeline |
-| [docs/MUTATIONS.md](docs/MUTATIONS.md) | Mutation safety |
-| [docs/EVALUATION.md](docs/EVALUATION.md) | Evaluation methodology |
-| [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md) | Ops troubleshooting |
-| [docs/CATALOG_INTEGRITY.md](docs/CATALOG_INTEGRITY.md) | Product model |
-
----
-
-## Tests
+**Docs:** [Privacy](PRIVACY.md) · [Architecture](docs/ARCHITECTURE.md) · [AI pipeline](docs/AI_PIPELINE.md) · [Mutations](docs/MUTATIONS.md) · [Evaluation](docs/EVALUATION.md) · [Catalog Integrity](docs/CATALOG_INTEGRITY.md)
 
 ```bash
-npm run test:consistency   # deterministic engine (CI)
-npm run test:registry      # attribute registry + policy
-npm run test:mutations     # mocked Shopify mutations
-npm run typecheck
-npm run lint
-npm run build
+npm run test:consistency   # rules engine
+npm run test:registry      # attributes & policy
+npm run test:mutations     # Shopify mutation safety
+npm run typecheck && npm run lint && npm run build
+npx tsx scripts/eval-scorecard.ts
 ```
 
-Optional live vision: `npm run test:vision` (requires `GROQ_API_KEY`).
+---
 
-Eval scorecard: `npx tsx scripts/eval-scorecard.ts`
+Sellenvo doesn’t replace your judgment.  
+It finds what’s wrong, proves why, and changes only what you approve.
