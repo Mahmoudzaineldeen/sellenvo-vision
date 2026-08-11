@@ -18,13 +18,41 @@ Listing → Visual evidence → Compare → Merchant decision → Safe mutation 
 
 ---
 
-## Why it matters
+## Business problem
 
-Inconsistent listings create returns, support tickets, and lost trust.
+Fashion, accessories, home, and general merchandise catalogs drift over time:
 
-Sellenvo helps merchants answer:
+| Pain | What happens in the store |
+|------|---------------------------|
+| Visual/metadata mismatch | Color, material, or type on the listing doesn’t match the photo |
+| Customer distrust | Buyers feel misled → refunds, chargebacks, negative reviews |
+| Ops drag | Support and catalog teams manually spot-check products |
+| Silent AI risk | Auto-tagging tools rewrite fields without proof or audit |
 
-> What is wrong, why do we think that, what will change if I click Fix, and did Shopify actually update?
+Sellenvo is built for **catalog managers and merchant operators** who need a trustworthy “what’s wrong and can I fix it safely?” workflow — not another enrichment dashboard.
+
+### Who it’s for
+
+- Shopify merchants with image-led catalogs (apparel, bags, footwear, jewelry, accessories, home)
+- Teams that already feel returns/support pressure from listing quality
+- Operators who will **not** accept silent title rewrites or unverified AI mutations
+
+### What we sell (positioning)
+
+> Trusted visual integrity + conservative detection + merchant-controlled correction + verified Shopify mutations + auditability.
+
+Differentiation is **trust and safety**, not “we use computer vision.”
+
+### Business value levers (what a pilot should measure)
+
+| Lever | How Sellenvo helps | How to measure in a pilot |
+|-------|--------------------|---------------------------|
+| Fewer bad listings live | Inbox surfaces mismatches before customers do | Mismatches found / corrected per week |
+| Faster catalog QA | Batch scan + prioritized “needs attention” | Minutes per reviewed product vs manual |
+| Safer corrections | Confirm → mutate → verify → audit | Mutation success rate; zero silent writes |
+| Lower false automation risk | Safe auto-fix off by default; FAFR tracked | False Auto-Fix Rate on approved attributes |
+
+**We do not claim** return reduction %, revenue lift, or ROI until a live merchant pilot produces those numbers.
 
 ---
 
@@ -43,6 +71,53 @@ Catalog Health
 Primary screen: **Catalog Health** — “What needs my attention?”
 
 Per-product screen: **Guardian** — evidence, Apply Fix, Manual Edit, Apply All (safe / review).
+
+---
+
+## Accuracy & evaluation
+
+### Label (read this first)
+
+```text
+INTERNAL EVALUATION / PROTOTYPE BENCHMARK
+```
+
+Figures below come from `docs/eval-results.jsonl` (20 curated cases covering match, mismatch, alias, uncertain, and not-detectable paths).  
+They are **not** a merchant field study and **not** live multi-store accuracy.
+
+Model confidence (High / Medium / Low) is **never** presented as empirical accuracy.
+
+### Prototype scorecard (run: `npx tsx scripts/eval-scorecard.ts`)
+
+| Metric | Result | Notes |
+|--------|--------|-------|
+| Samples | 20 | Curated internal cases |
+| Detection agreement | **95.0%** (19/20) | Human-labeled expected detection vs recorded outcome |
+| Suggested-fix correctness | **83.3%** (5/6) | Among cases that proposed a fix |
+| False Auto-Fix Rate (FAFR) | **16.7%** (1/6) | Critical safety metric — why safe auto-fix stays off by default |
+| Uncertain rate | **5.0%** | Engine prefers UNCERTAIN over guessing |
+| Not-detectable rate | **10.0%** | Unrecognized / unknown materials are not forced into MISMATCH |
+
+#### By attribute (same internal set)
+
+| Attribute | Status | Detection agreement | FAFR | Samples |
+|-----------|--------|---------------------|------|---------|
+| Color | PRODUCTION | 88.9% | 33.3% | 9 |
+| Product type | PRODUCTION | 100.0% | 0.0% | 5 |
+| Material | PRODUCTION | 100.0% | 0.0% | 6 |
+| Pattern | EXPERIMENTAL | — | — | gated / not in this set |
+| Finish | EXPERIMENTAL | — | — | gated / not in this set |
+
+### Deterministic engine (CI — separate from vision accuracy)
+
+The consistency / normalization / policy engine is covered by automated tests (`npm run test:consistency`, `test:registry`, `test:mutations`). These prove **rules correctness**, not photo recognition accuracy. See [docs/EVALUATION.md](docs/EVALUATION.md) for the real-image eval protocol and FAFR promotion gate.
+
+### Safety posture that follows from the numbers
+
+- Default: **merchant confirmation** for almost all fixes
+- `safeAutoFixEnabled` defaults to **off**
+- Color is the only `safe`-eligible attribute, and only when the shop explicitly enables it
+- FAFR must improve on a real-image set before broadening auto-fix
 
 ---
 
@@ -73,8 +148,6 @@ Or create a single golden-path product: **Create Demo Product B**.
 | Finish | EXPERIMENTAL | `sellenvo.finish` | Confirm |
 
 Pattern/Finish stay experimental until evaluation evidence justifies promotion.
-
-**Internal evaluation only** — model confidence is not claimed accuracy. See [docs/EVALUATION.md](docs/EVALUATION.md).
 
 ---
 
@@ -192,4 +265,5 @@ Eval scorecard (internal): `npx tsx scripts/eval-scorecard.ts`
 - Color analysis uses the **first** Color option value only (multi-variant UI warns)
 - Vision cache and mutation rate limits are process-local (single-instance pilot)
 - Pattern/Finish are experimental and gated by settings
-- No fabricated return/revenue metrics — only measured internal evaluation
+- Accuracy tables above are **internal prototype benchmarks**, not merchant ROI proof
+- No claimed return/revenue lift until a live pilot measures it

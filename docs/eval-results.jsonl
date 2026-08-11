@@ -1,5 +1,20 @@
-{"id":"E01","attribute":"color","claimed":"Red","detected":"Black","labelCorrect":true,"suggestedFix":"Black","fixCorrect":true,"verdict":"MISMATCH","note":"Internal evaluation — demo golden path shape"}
+{"id":"E01","attribute":"color","claimed":"Red","detected":"Black","labelCorrect":true,"suggestedFix":"Black","fixCorrect":true,"verdict":"MISMATCH","note":"Internal evaluation — golden path color mismatch"}
 {"id":"E02","attribute":"color","claimed":"Black","detected":"Black","labelCorrect":true,"suggestedFix":null,"fixCorrect":null,"verdict":"MATCH","note":"Internal evaluation — correct listing"}
-{"id":"E03","attribute":"material","claimed":"Plastic","detected":"leather","labelCorrect":true,"suggestedFix":"Leather","fixCorrect":true,"verdict":"MISMATCH","note":"Internal evaluation — synthetic demo case"}
-{"id":"E04","attribute":"productType","claimed":"Bag","detected":"wallet","labelCorrect":true,"suggestedFix":"Wallet","fixCorrect":true,"verdict":"MISMATCH","note":"Internal evaluation — synthetic demo case"}
-{"id":"E05","attribute":"color","claimed":"Navy","detected":"Blue","labelCorrect":false,"suggestedFix":"Blue","fixCorrect":false,"verdict":"MISMATCH","note":"Internal evaluation — example false mismatch / false fix"}
+{"id":"E03","attribute":"color","claimed":"Grey","detected":"gray","labelCorrect":true,"suggestedFix":null,"fixCorrect":null,"verdict":"MATCH","note":"Internal evaluation — alias normalization"}
+{"id":"E04","attribute":"color","claimed":"Navy","detected":"navy blue","labelCorrect":true,"suggestedFix":null,"fixCorrect":null,"verdict":"MATCH","note":"Internal evaluation — alias match"}
+{"id":"E05","attribute":"color","claimed":"Blue","detected":"Green","labelCorrect":true,"suggestedFix":"Green","fixCorrect":true,"verdict":"MISMATCH","note":"Internal evaluation — clear color mismatch"}
+{"id":"E06","attribute":"color","claimed":"White","detected":"off-white","labelCorrect":true,"suggestedFix":null,"fixCorrect":null,"verdict":"MATCH","note":"Internal evaluation — off-white alias"}
+{"id":"E07","attribute":"color","claimed":"Red","detected":"Burgundy","labelCorrect":false,"suggestedFix":"Burgundy","fixCorrect":false,"verdict":"MISMATCH","note":"Internal evaluation — planted false mismatch (conservative risk)"}
+{"id":"E08","attribute":"color","claimed":"Black","detected":"Black","labelCorrect":true,"suggestedFix":null,"fixCorrect":null,"verdict":"UNCERTAIN","note":"Internal evaluation — poor image quality gate → UNCERTAIN"}
+{"id":"E09","attribute":"productType","claimed":"Wallet","detected":"wallet","labelCorrect":true,"suggestedFix":null,"fixCorrect":null,"verdict":"MATCH","note":"Internal evaluation — type match"}
+{"id":"E10","attribute":"productType","claimed":"Bag","detected":"wallet","labelCorrect":true,"suggestedFix":"Wallet","fixCorrect":true,"verdict":"MISMATCH","note":"Internal evaluation — type mismatch"}
+{"id":"E11","attribute":"productType","claimed":"Sneaker","detected":"shoe","labelCorrect":true,"suggestedFix":null,"fixCorrect":null,"verdict":"MATCH","note":"Internal evaluation — type alias"}
+{"id":"E12","attribute":"productType","claimed":"Apparel","detected":"sweatshirt","labelCorrect":true,"suggestedFix":null,"fixCorrect":null,"verdict":"MATCH","note":"Internal evaluation — category containment"}
+{"id":"E13","attribute":"productType","claimed":"Handbag","detected":"bag","labelCorrect":true,"suggestedFix":null,"fixCorrect":null,"verdict":"MATCH","note":"Internal evaluation — bag alias"}
+{"id":"E14","attribute":"material","claimed":"Plastic","detected":"leather","labelCorrect":true,"suggestedFix":"Leather","fixCorrect":true,"verdict":"MISMATCH","note":"Internal evaluation — material mismatch"}
+{"id":"E15","attribute":"material","claimed":"Leather","detected":"genuine leather","labelCorrect":true,"suggestedFix":null,"fixCorrect":null,"verdict":"MATCH","note":"Internal evaluation — material alias"}
+{"id":"E16","attribute":"material","claimed":"Cotton","detected":"denim","labelCorrect":true,"suggestedFix":"Denim","fixCorrect":true,"verdict":"MISMATCH","note":"Internal evaluation — material mismatch"}
+{"id":"E17","attribute":"material","claimed":"Metal","detected":"stainless steel","labelCorrect":true,"suggestedFix":null,"fixCorrect":null,"verdict":"MATCH","note":"Internal evaluation — metal alias"}
+{"id":"E18","attribute":"material","claimed":"Leather","detected":"suede","labelCorrect":true,"suggestedFix":null,"fixCorrect":null,"verdict":"NOT_DETECTABLE","note":"Internal evaluation — unrecognized material skipped (no false MISMATCH)"}
+{"id":"E19","attribute":"material","claimed":"Cotton","detected":"unknown","labelCorrect":true,"suggestedFix":null,"fixCorrect":null,"verdict":"NOT_DETECTABLE","note":"Internal evaluation — unknown → not actionable"}
+{"id":"E20","attribute":"color","claimed":"Teal","detected":"teal","labelCorrect":true,"suggestedFix":null,"fixCorrect":null,"verdict":"MATCH","note":"Internal evaluation — exact color match"}
